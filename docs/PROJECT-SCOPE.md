@@ -55,7 +55,7 @@ A dispatcher enters a load — origin, destination, and which truck is running i
 
 1. A **baseline truck-legal route** from A to B.
 2. The **cheapest diesel stations** along or near that route, from the BVD price sheet for the specific effective day.
-3. An **optimised route** inserting selected stations as mandatory stops, respecting the 500-mile operational cap as a hard constraint (may be altered to optimize it based on truck mpg and when it will empty with a buffer) while minimising total fuel cost.
+3. An **optimised route** inserting selected stations as mandatory stops, respecting the 500-mile operational cap as a hard constraint while minimising total fuel cost. (v1 fixes that cap and the 300-mile floor as flat distances; deriving them from tank size, MPG and a reserve buffer is a later change — §5.6.)
 4. **Map data** for both routes plus station markers.
 5. A **summary table** of stops with gallons, price, cost, and cumulative distance and duration.
 6. A **shareable Google Maps link** the dispatcher sends to the driver.
@@ -114,7 +114,7 @@ No `src/`. No backend of any kind. No ingest, no routing adapter, no corridor qu
 - Origin assumed at 100% fuel (adjustable)
 - Three truck profiles (Volvo-based)
 - One supplier (BVD), one product (ULSD)
-- Manual CSV upload, plus CLI bulk backfill
+- CLI ingest — single file and bulk backfill, no upload UI (§11.2)
 - Single user with login
 - Cost minimisation under the 500-mile operational cap
 - Styled, interactive map with both routes and hoverable station pins
@@ -129,6 +129,7 @@ No `src/`. No backend of any kind. No ingest, no routing adapter, no corridor qu
 | Canada lanes | A second BVD CSV exists in the same format; see §20 |
 | User-defined truck profiles | An INSERT, not a migration |
 | Automated Gmail ingest | `price_imports` is the seam |
+| Dispatcher-facing CSV upload | The ingest is a library function with entry points bolted on; the HTTP route is a thin wrapper (§11.2) |
 | Additional fuel suppliers | `supplier` columns throughout |
 | Receipt vs. plan backtesting | Driver invoices first, OCR second |
 | Metrics dashboards | Depends on accumulated history |
@@ -255,11 +256,17 @@ The `price_ifta_net` generated column stays in the schema. It costs nothing, nee
 
 This section governs the algorithm.
 
+**Decided for v1: the leg window is a pair of flat distances — a 500-mile cap and a 300-mile floor — and nothing else.** Where the truck may stop is a function of miles travelled since the last fill, not of how much fuel is physically left in the tank. Tank capacity and MPG are still in the model, but they do one job in v1: converting miles into gallons and gallons into dollars. They do not decide where a leg may end.
+
+This is deliberate, not an approximation waiting to be fixed. The 500-mile cap is operational policy and binds long before physical range does (§5.1), so a range-derived cap would compute a larger number that the policy immediately overrides. Fixing the window also keeps the two numbers legible to a dispatcher — "never more than 500, never less than 300" is a rule a person can check by eye against the summary table.
+
+**Later, the window can be derived from the truck instead** — usable range from tank, MPG and a reserve buffer, rather than a constant. §5.6 sets out what that change touches. It changes *how `max_leg_miles` and `min_leg_miles` get their values*, not the algorithm that consumes them, which is why it is safe to defer: every parameter it needs is already a column on the truck profile (§5.5, §12).
+
 ### 5.1 The operational cap
 
-**The truck must never travel more than 500 miles between fuel purchases.** This is operational policy, not a tank limit — it binds well before physical range does. A 150-gallon tank at 6.5 mpg is 975 miles nominal; every profile in §16 comfortably exceeds 500.
+**The truck must never travel more than 500 miles between fuel purchases.** This is operational policy, not a tank limit — it binds well before physical range does. A 150-gallon tank at 6.5 mpg is 975 miles nominal; every profile in §16 comfortably exceeds 500. **The optimiser therefore never checks physical range against the cap in v1**, because on every profile in the fleet that check could not fail.
 
-**There is also a hard 300-mile minimum between fuel purchases.** Stopping sooner is not wanted — a stop has fixed overhead and a near-full tank has nowhere to put the fuel.
+**There is also a hard 300-mile minimum between fuel purchases.** Stopping sooner is not wanted — a stop has fixed overhead and a near-full tank has nowhere to put the fuel. Like the cap, this is a flat distance in v1 and not a fraction of the tank.
 
 **The minimum does not apply to the final leg.** You do not buy fuel at the destination, so the last fill only needs to be within 500 miles of arrival; there is no floor on how close it can be. This is a frequent source of off-by-one bugs — it has a dedicated test in §15.6.
 
@@ -296,18 +303,52 @@ Because the minimum leg can be relaxed and the cap forces stops regardless of ne
 
 ### 5.5 Parameters
 
-| Parameter | Default | Lives in |
-|---|---|---|
-| `max_leg_miles` | 500 | truck profile |
-| `min_leg_miles` | 300 | truck profile; auto-relaxed to 0 on infeasibility |
-| `tank_gallons` | per profile | truck profile |
-| `avg_mpg` | per profile | truck profile |
-| `reserve_fraction` | 0.15 | truck profile |
-| `fixed_stop_minutes` | 20 | truck profile, overridable per plan |
-| `driver_cost_per_hour` | 0 | per plan |
-| `cost_per_mile` | 0 | truck profile, overridable per plan |
-| `startFuelGallons` | tank capacity | per plan |
-| `maxStops` | null | per plan |
+Each parameter is marked with what it actually drives, because the split is what §5.6 later changes: the **window** parameters decide where a leg may end, the **fuel** parameters decide only how many gallons and dollars a stop involves.
+
+| Parameter | Default | Lives in | Drives |
+|---|---|---|---|
+| `max_leg_miles` | 500 | truck profile | Window — hard cap, set directly |
+| `min_leg_miles` | 300 | truck profile; auto-relaxed to 0 on infeasibility | Window — hard floor, set directly |
+| `tank_gallons` | per profile | truck profile | Fuel — how much can be carried forward (§5.4) |
+| `avg_mpg` | per profile | truck profile | Fuel — miles → gallons → dollars |
+| `reserve_fraction` | 0.15 | truck profile | Fuel — minimum arrival level |
+| `fixed_stop_minutes` | 20 | truck profile, overridable per plan | Penalty (§5.2) |
+| `driver_cost_per_hour` | 0 | per plan | Penalty (§5.2) |
+| `cost_per_mile` | 0 | truck profile, overridable per plan | Penalty (§5.2) |
+| `startFuelGallons` | tank capacity | per plan | Fuel — DP start state |
+| `maxStops` | null | per plan | Window — optional stop-count ceiling |
+
+`tank_gallons`, `avg_mpg` and `reserve_fraction` appear in the Fuel rows only. That is the whole content of the v1 decision: **no window value is computed from a fuel value.**
+
+### 5.6 Later: deriving the window from the truck
+
+Not built in v1. Recorded here so the eventual change is a substitution rather than a redesign.
+
+Today `max_leg_miles` and `min_leg_miles` are constants on the truck profile. The alternative is to compute them per plan from what the truck can physically do:
+
+```
+usable_gallons = tank_gallons × (1 − reserve_fraction)
+physical_range = usable_gallons × avg_mpg
+max_leg_miles  = min(policy_cap_miles, physical_range × (1 − mpg_error_buffer))
+min_leg_miles  = a headroom rule — the distance below which a fill is not worth
+                 stopping for, given tank_gallons and expected arrival level
+```
+
+**What would change:** one function producing the two window values, called once at plan setup. The truck profile gains `policy_cap_miles` and `mpg_error_buffer`.
+
+**Explicitly: `truck_profiles.max_leg_miles` and `min_leg_miles` (§12) get superseded, not reused.** They stop being the stored answer and are replaced on that table by `policy_cap_miles` and `mpg_error_buffer` — the two inputs the formula above actually needs. Nothing on `truck_profiles` still holds a flat mileage number once this lands; a profile might keep the pair only as an optional manual override for a dispatcher who wants to force a lower cap, and that is a UX decision, not a structural requirement.
+
+**`plans.max_leg_miles` and `min_leg_miles` (§12) do not move.** They were never the input — they are the record of what value the DP actually ran with for that specific plan, the same role `min_leg_relaxed` plays beside them (§12.2). Whether that number came from a flat profile default (v1) or the formula above (v2), the DP still consumes one concrete number per leg and the plan still has to say what it was, so this pair is permanent regardless of which side of this change is live.
+
+**What would not change:** the DP in §15, the relaxation pass in §5.1, the stop penalty in §5.2, and the API contract in §14 — `maxLegMiles` and `minLegMiles` are already per-plan request fields with profile defaults, so a derived default arrives through the same channel a caller override does. §16's profiles already carry every column the formula reads.
+
+**What has to be settled first**, and cannot be settled from here:
+
+- **The real fleet MPG (§21 Q4).** A range-derived cap is only as trustworthy as the MPG behind it. Deriving a 900-mile cap from a wrong 7.5 mpg is worse than a flat 500 that is wrong for nobody.
+- **Whether the policy cap survives (§21 Q9).** If 500 miles is a driver-hours and stop-cadence rule rather than a range proxy, the `min()` returns 500 on every profile and the derivation buys nothing.
+- **The MPG error buffer.** §18 risk 5 puts MPG error at ±10%. Whatever buffer replaces today's implicit margin has to cover it.
+
+The honest summary: this change matters for a truck whose physical range falls *below* the policy cap — a smaller tank, a heavier load, a worse duty cycle. No profile in §16 is close. Build it when such a truck exists, or when receipt data (§20 Phase 3) makes MPG trustworthy enough to compute a range from.
 
 ---
 
@@ -319,6 +360,7 @@ Because the minimum leg can be relaxed and the cap forces stops regardless of ne
 | 2 | Start at 100% fuel | Mandatory pre-border fill; always the case |
 | 3 | 500-mile hard cap between fills | Operational policy; binds before tank capacity |
 | 4 | Hard 300-mile minimum leg, auto-relaxed on infeasibility | Avoids pointless short hops without creating dead ends |
+| 4a | **Flat-distance leg window in v1** — no window value derived from tank size, MPG or reserve | The policy cap binds on every profile in §16, so a derived cap would be overridden anyway. The range-derived version is specified but deferred (§5.6) |
 | 5 | Exact DP over `(station, fuel level)` | Small problem; optimal beats heuristic (§22.3) |
 | 6 | Optimiser is a swappable strategy | Explicit modularity requirement |
 | 7 | `YOUR PRICE` as the price basis | IFTA out of scope; `price_ifta_net` retained |
@@ -329,7 +371,7 @@ Because the minimum leg can be relaxed and the cap forces stops regardless of ne
 | 12 | OpenRouteService for v1, HERE deferred behind an interface | §8.2 |
 | 13 | MapLibre GL JS for rendering | Full styling control, free |
 | 14 | Google Maps link as driver output | Matches the existing workflow |
-| 15 | Manual CSV upload in v1 | Gmail poller becomes another caller later |
+| 15 | **CLI-only ingest in v1** — no upload UI, no `/imports` endpoints | The ingest is entry-point agnostic; the upload route and the Gmail poller are both later callers of the same function (§11.2) |
 | 16 | Store miles + gallons; convert at the API boundary | `?units=metric` toggle |
 | 17 | Permanent station coords from operator export, OSM and Census only | Provider geocoding has a 30-day cap (§17) |
 | 18 | Structured logging on every provider call | Keyed by request hash |
@@ -364,7 +406,8 @@ Python was considered for the ingest pipeline. **Decision: TypeScript for the in
 **Why the ingest is TypeScript, specifically:**
 
 1. **It is not a data-processing problem.** 605 rows per file; the full ten-year backfill is roughly 2.2M rows of flat CSV with zero nulls and 15 columns. Nothing pandas offers beats `csv-parse` and a loop at that size.
-2. **§11.2 needs one ingest behind two entry points** — `POST /api/v1/imports/batch` and `npm run backfill`. This is the deciding constraint. A Python ingest means the HTTP path either shells out to a subprocess from a Next route handler, or becomes a second deployed service with its own connection pool and env vars. Two runtimes, no benefit.
+2. **The ingest has to run inside the deployed Node runtime, even though v1 only calls it from a CLI.** §11.2's HTTP upload route and §20's Gmail poller are both deferred, not cancelled, and both call the ingest in-process from Vercel. A Python ingest means that path either shells out to a subprocess from a Next route handler, or becomes a second deployed service with its own connection pool and env vars. Two runtimes, no benefit — and a rewrite the day the upload route lands.
+   *(This argument was stronger when v1 shipped the HTTP endpoint. It is now a bet on Phase 2 rather than a same-release constraint — but point 3 below holds regardless of entry point, and CLI-only makes a Python ingest more tempting, not less. Naming that is the point of writing it down.)*
 3. **The validation rules are shared with the API.** §11.1 step 4 validates the same shapes the API later reads back. One Zod schema means the rule exists once; two languages means maintaining it twice, by hand, with silent drift.
 4. **Deployment is Vercel + Neon.** There is nowhere for a Python worker to live under the current plan.
 
@@ -374,7 +417,7 @@ Python was considered for the ingest pipeline. **Decision: TypeScript for the in
 - **Data analysis.** §4's verification was done in pandas, which is the right call and took minutes.
 - **Phase 3 backtesting and Phase 4 forecasting** (§20), for the same reason.
 
-**What is not allowed:** writing the backfill in Python "just for the CLI path" while the endpoint is TypeScript. Two implementations of the same ingest is two chances to disagree about what a valid row is, and the `file_sha256` idempotency in §11.2 only protects you if both paths produce identical results.
+**What is not allowed:** writing the ingest in Python because v1 is "just a CLI." It is the same ingest the upload route and the Gmail poller will call, and two implementations of it is two chances to disagree about what a valid row is — the `file_sha256` idempotency in §11.2 only protects you if every path produces identical results.
 
 Any Python that is written lives in `scripts/` with a `requirements.txt`, is run by hand, and is never imported by application code.
 
@@ -557,6 +600,8 @@ Supports up to 9 intermediate waypoints; 1–4 fuel stops fits comfortably.
 
 At 605 rows this runs in seconds. Synchronous is fine.
 
+**The ingest is a function, not an endpoint.** `ingestFile(buffer, meta)` takes bytes and returns a report; it does no HTTP, reads no `process.argv`, and prints nothing. v1 gives it exactly one caller — the CLI in §11.2. The upload route (§14) and the Gmail poller (§20) are later callers of the same function, which is the only reason deferring them costs nothing.
+
 **Rejected rows are quarantined with a reason code, never dropped and never default-mapped.** An unmapped `PROD` value fails the row rather than guessing at it — that guard is the entire reason the product-code table exists (§22.4).
 
 ### 11.2 Bulk import and historical backfill
@@ -565,14 +610,25 @@ Roughly **ten years** of daily CSVs exist in Gmail, all in the same format. **St
 
 **One file = one day of validity.** Because a sheet arrives every day including weekends, each file's prices are valid for exactly the single day its header names. Set `valid_on = effective_date` rather than modelling "valid until superseded" as a range. This makes ingest **order-independent** — files can be uploaded in any sequence, and the `UNIQUE (station_id, raw_product, valid_on)` constraint is the only thing that can fire, and only on a genuine duplicate. Gaps stay visible rather than being papered over by a stale price carried forward.
 
-**Two bulk paths, both wrapping the same single-file ingest:**
+**v1 ships two CLI entry points and no HTTP upload.** Both wrap the same single-file ingest (§11.1):
 
-| Path | Endpoint / command | Use |
+| Path | Command | Use |
 |---|---|---|
-| Multi-file upload | `POST /api/v1/imports/batch` — accepts a `.zip` or multiple files | Dispatcher-facing; drag a folder in |
+| CLI single file | `npm run ingest -- ./data/bvd/pcn-usd-9206810-981.csv` | The daily sheet |
 | CLI backfill | `npm run backfill -- ./data/bvd/2026-01/` | Ten-year replays; no timeout pressure |
 
-Both are idempotent via `file_sha256`, so re-running is free and partial failures can simply be re-run. The batch endpoint returns one `batch_id` with per-file status, so a single malformed sheet does not sink the run.
+Both are idempotent via `file_sha256`, so re-running is free and partial failures can simply be re-run. Both write an `import_batches` row with per-file status, so a single malformed sheet does not sink the run, and print the §11.1 report to stdout.
+
+**Deferred: `POST /api/v1/imports/batch` and the upload UI.** A dispatcher dragging a folder into a browser is the eventual shape, and the schema already supports it — `import_batches`, `import_rejections` and the per-file status columns are built in v1 by the CLI, not added later for the endpoint. What is deferred is a route handler, a multipart parser, a progress UI and a Vercel function-timeout problem that a `.zip` of 3,650 files would create. None of that is needed to get ten years of prices into the database.
+
+**Why this is the right call while v1 is being tested rather than run.** The operator and the user are the same person. A CLI is not a downgrade from an upload button for that person — it is faster to use, scriptable, and it makes the January backfill a single command instead of a browser tab that must stay open. The upload UI exists to serve someone who does not have a terminal. Until that someone exists, building it is work with no reader.
+
+**What the deferral does not cost.** `priceAsOf` is unaffected: it reads `effective_date` from the sheet header (§4.1) and the CLI writes it exactly as any other entry point would. §18 risk 4 requires it in every response regardless of how the sheet arrived. Nothing about staleness handling changes with the entry point — only who is positioned to fix it.
+
+**The condition for revisiting.** *The day a second person uses the planner.* At that point the ingest becomes someone else's dependency, and "ask the developer to run a command" stops being a workflow. Two things follow, in this order:
+
+1. **The Gmail poller (§20 Phase 2) is the real answer**, not the upload UI. It removes the daily action entirely rather than moving it into a browser, and it is the smaller build — a Vercel Cron, a Gmail fetch, and a call to the same `ingestFile`.
+2. **The upload route is then the exception handler** — corrected re-sends, one-off gap fills, a day the poller missed. That is a genuinely smaller feature than the drag-a-folder backfill tool it would have been in v1, because the backfill is already done by then.
 
 **Detecting gaps:** after a backfill, report any date in the range with no `price_imports` row. **January 2026 is missing 2026-01-11** (§4.3), so this reports a real gap on the first run — which is the correct behaviour, not a bug to suppress. A missing day means either an email was deleted or BVD skipped a send.
 
@@ -922,8 +978,8 @@ CREATE TABLE plans (
   fixed_stop_minutes   integer      NOT NULL DEFAULT 20,
   max_stops            smallint,
 
-  status               text NOT NULL DEFAULT 'pending'
-                         CHECK (status IN ('pending','computing','completed','infeasible','failed')),
+  status               text NOT NULL
+                         CHECK (status IN ('completed','infeasible')),
   infeasible_reason    text,
 
   total_fuel_cost_usd  numeric(10,2),
@@ -936,7 +992,8 @@ CREATE TABLE plans (
   disclaimers          jsonb NOT NULL DEFAULT '[]'::jsonb,
 
   created_at           timestamptz NOT NULL DEFAULT now(),
-  completed_at         timestamptz
+  completed_at         timestamptz,
+  dispatched_at        timestamptz   -- set when a human actually sends this plan to a driver; NULL = computed only
 );
 
 CREATE TABLE plan_stops (
@@ -1013,6 +1070,8 @@ CREATE TABLE provider_quota (        -- theirs: an observed rate limit, no state
 - `truck_profiles` needs no migration for user-defined profiles — `owner_user_id` plus the partial unique index handles it.
 - `plans.optimizer_strategy` records which algorithm produced a plan, so results stay interpretable across upgrades.
 - `plans.min_leg_relaxed` records that §5.1's fallback fired, so a plan with a short leg is always distinguishable from one that met the floor.
+- **`plans.status` has only two values: `completed` and `infeasible`.** `pending`/`computing`/`failed` were dropped. They belong to an async job model — submit, then poll a status while a worker churns — and v1 explicitly has none of that: §6 decision 19 rules out a job queue, and §10 measures plan computation at 3–10s of mostly I/O wait, comfortably inside one synchronous request. A `plans` row is written once, at the end of `POST /plans`, already carrying its final outcome — there is no in-between state for the database to hold, and a status column that implies one invites a client to poll for a transition that will never happen. `failed` goes for the same reason from the other direction: a technical failure (provider timeout, budget guard, an unhandled exception) is not a business outcome worth a permanent row — it returns an RFC 9457 error response (§14) and nothing is persisted. Only `infeasible` is a persisted non-success, because it is the DP's actual answer — "no valid plan exists under these constraints" — not a crash.
+- **`plans.dispatched_at` is deliberately separate from `status`.** `status = 'completed'` means the optimiser finished and produced stops — it says nothing about whether anyone acted on the result. A dispatcher exploring three truck profiles for the same lane produces three completed plans and dispatches one. `dispatched_at` (nullable, unset by default) is that human signal: null means "computed only," a timestamp means "this is the plan that was actually sent to a driver." Nothing sets it automatically in v1 — no endpoint marks it yet — so it carries no weight until a caller writes to it, but the column exists now so the distinction is not lost in the interim. Its first real use is §20 Phase 3: backtesting should reconcile driver receipts against dispatched plans, not against every exploratory computation a dispatcher discarded.
 - **Keep a schema-drift test.** Mirror the migrations in the query builder's schema definition and compare that mirror against `information_schema` on every test run. Code and database then cannot drift from each other. Neither checks *this document* — when they disagree with §12, the migration wins and §12 gets edited.
 
 ---
@@ -1020,15 +1079,21 @@ CREATE TABLE provider_quota (        -- theirs: an observed rate limit, no state
 ## 13. Service boundaries
 
 ```
-API Layer (Next.js route handlers)
-  └─ validation, auth, serialisation, unit conversion. No business logic.
-      ├── Ingest Service ......... parse, validate, promote
-      ├── Resolution Service ..... operator export → OSM → gazetteer → manual queue
-      ├── Catalog Service ........ profiles, stations, price history, saved locations
-      └── Planning Service ....... orchestration
-              ├── Routing Adapter (ORS in v1 | HERE | Google) + budget guard
-              └── Optimizer Strategy  ← PURE, no I/O
+Entry points
+  ├─ API Layer (Next.js route handlers) ─ validation, auth, serialisation,
+  │                                        unit conversion. No business logic.
+  └─ CLI (npm run ingest | backfill) ──── argv, stdout report. No business logic.
+
+Services — framework-free, callable from either entry point
+  ├── Ingest Service ......... parse, validate, promote   ← CLI only in v1 (§11.2)
+  ├── Resolution Service ..... operator export → OSM → gazetteer → manual queue
+  ├── Catalog Service ........ profiles, stations, price history, saved locations
+  └── Planning Service ....... orchestration
+          ├── Routing Adapter (ORS in v1 | HERE | Google) + budget guard
+          └── Optimizer Strategy  ← PURE, no I/O
 ```
+
+**The CLI is a second entry point, not a second implementation.** It does argument parsing and report printing and nothing else — the same rule the API layer follows. This is what makes §11.2's deferred upload route a wrapper rather than a rewrite, and it is the constraint §7.1 leans on when it rules out a Python ingest.
 
 **Auth sits in front of the API, not inside it.** Keep `src/api/` framework-free so the whole API can mount in a single Next route file and be exercised by tests without a server. A thin proxy layer refuses anonymous requests: 307 to `/signin` for a page, 401 `application/problem+json` for an API path — because a redirect answers `fetch` with a 200 carrying a sign-in page, which is a confusing failure. Nothing is exempt, including `GET /health`.
 
@@ -1097,16 +1162,26 @@ Versioned under `/api/v1`. Errors follow RFC 9457. All responses accept `?units=
 | `POST` | `/plans` | Create a plan |
 | `GET` | `/plans/{id}` | Fetch a plan — map + table + link in one payload |
 | `GET` | `/plans` | Recent plans |
+| `GET` | `/price-sheets` | Import identity for the UI — `effectiveOn`, `importedAt`, `stationCount` |
+| `GET` | `/stations` | Station layer (`?bbox=`, `?resolution=`) |
+| `GET` | `/stations/{id}/prices` | Price history |
+| `GET` | `/health` | DB, provider reachability, both call meters, latest sheet date |
+
+**No `/imports` routes in v1.** Ingest is CLI-only (§11.2); the endpoints below are specified so the deferral is a gap rather than an unknown, and are built when the upload UI is:
+
+| Method | Path | Purpose |
+|---|---|---|
 | `POST` | `/imports` | Upload a BVD CSV |
 | `POST` | `/imports/batch` | Bulk upload — zip or multi-file |
 | `GET` | `/imports/batch/{id}` | Per-file status for a batch |
 | `GET` | `/imports/{id}` | Status + validation report |
 | `GET` | `/imports/{id}/rejections` | Rejected rows with reasons |
-| `GET` | `/stations` | Station layer (`?bbox=`, `?resolution=`) |
-| `GET` | `/stations/{id}/prices` | Price history |
-| `GET` | `/health` | DB, provider reachability, both call meters, latest sheet date |
+
+The tables they read from (`import_batches`, `price_imports`, `import_rejections`) are populated by the CLI from step 2, so these are read-model endpoints over data that already exists — not a feature waiting on a schema change.
 
 ### `POST /plans`
+
+**Synchronous.** The request computes the plan in-process and the response carries the finished result directly — the same `completed`/`infeasible` body `GET /plans/{id}` returns, not a job reference to poll. This follows from §6 decision 19 (no job queue) and §10's measured 3–10s solve time, and it is why `plans.status` has no in-progress states (§12.2). `GET /plans/{id}` exists to re-fetch a plan later — a shared link, browsing history — not to poll one still computing.
 
 ```jsonc
 {
@@ -1437,6 +1512,8 @@ The Volvo VNL figures below are **sourced averages from published specs and real
 
 **MPG is the number worth correcting first.** It drives gallons purchased and therefore every dollar figure the app reports. **Tank capacity barely matters:** under a 500-mile cap, even the smallest profile carries 975 miles of range, so the tank is never the binding constraint. It only affects how much cheap fuel can be carried forward past an expensive mandatory stop (§5.4).
 
+**This table is also why the v1 window is flat (§5.6).** `max_leg` and `min_leg` are identical across all three profiles and independent of the `tank_gal` and `mpg` beside them — the physical range of the weakest profile is nearly twice the cap, so deriving the window from those columns would return the same 500 on every row.
+
 Suggested physical spec for `volvo-vnl-860`, passed to the routing provider: 36,287 kg gross, 411 cm height, 259 cm width, 2,250 cm length, 5 axles.
 
 **Adding a fourth profile is an INSERT.** The schema in §12 carries `truck_number` so a profile can be tied to a real fleet unit when that matters.
@@ -1525,8 +1602,8 @@ Numbered in the order they should be built. Nothing below is done.
 | # | Step | Done when |
 |---|---|---|
 | 1 | **Fix and rewrite the schema.** §12.1 — fix the syntax error, drop `effective_date UNIQUE`, add the missing tables, settle §21's naming questions. Load the Census Gazetteer. Seed 3 truck profiles + the `ULSD` product code. | `npm run db:reset` applies cleanly; a correct empty database |
-| 2 | **CSV ingest, single file, no geocoding.** §11.1 | 605 stations + 605 prices from the August sheet, with a clean validation report |
-| 3 | **Bulk import** (`/imports/batch` + CLI) and the **January 2026 backfill**. §11.2 | 30 days of real price history; the report names the 2026-01-11 gap and skips the byte-identical duplicate |
+| 2 | **CSV ingest, single file, no geocoding — as a function plus `npm run ingest`.** §11.1 | 605 stations + 605 prices from the August sheet, with a clean validation report printed to stdout |
+| 3 | **CLI bulk backfill** (`npm run backfill`) and the **January 2026 backfill**. §11.2 | 30 days of real price history; the report names the 2026-01-11 gap and skips the byte-identical duplicate |
 | 4 | **Station resolution from the operator export.** §11.4 step 1 | 604/605 `exact`, store #306 queued for manual entry |
 | 5 | **Gazetteer fallback + manual review.** §11.4 steps 3–4 | 605/605 resolved |
 | 6 | **Routing adapter** — ORS behind §8.4's interface — **with the budget guard and both meters**. §8.3 | A truck route that differs from a car route at a known low bridge; real rate-limit figures recorded in §8.3 |
@@ -1556,7 +1633,8 @@ Numbered in the order they should be built. Nothing below is done.
 
 ### Phase 2 — Automation and reach
 
-- **Gmail poller → automatic daily ingest.** Vercel Cron; `price_imports` is the seam, and the ingest service does not change.
+- **Gmail poller → automatic daily ingest.** Vercel Cron; `price_imports` is the seam, and the ingest service does not change. **Promoted in priority by the CLI-only decision (§11.2)** — with no upload UI, this is what makes daily operation hands-off, and it is the smaller of the two builds.
+- **Dispatcher-facing upload — the `/imports` routes (§14) plus a drag-a-folder UI.** Deferred from v1. Worth building for corrected re-sends and one-off gap fills even after the poller lands, since those are exactly the cases the poller does not cover.
 - **Canada support.** A second BVD CSV exists in the same format. Work required: `country` column already present; Statistics Canada gazetteer for place centroids; OSM coverage for Canadian truck stops; cross-border routing; litres/kilometres via the existing units toggle; CAD/USD handling.
 - Multi-stop deliveries (A→B→C)
 - Round trips (A→B→A) with joint cross-leg optimisation
@@ -1569,6 +1647,8 @@ Numbered in the order they should be built. Nothing below is done.
   - **Receipt photos, PDFs and paper** need OCR to extract station, date, gallons and price. A project in its own right.
 
   Start with invoices. Photos are the fallback for gaps, not the primary source.
+
+  **Reconcile against `plans.dispatched_at IS NOT NULL` only** (§12.2) — an invoice will not match a plan the dispatcher computed and discarded in favour of another truck profile, and matching against every completed plan would manufacture false mismatches.
 - Metrics and graphs: spend over time, savings realised, price trends by state and corridor, station usage.
 - Plan accuracy: predicted vs actual gallons and cost. This is what finally corrects §16's MPG figures with real numbers.
 
@@ -1577,6 +1657,7 @@ Numbered in the order they should be built. Nothing below is done.
 - **Fuel price forecasting.** Needs the historical backfill; ten years is available in Gmail. §4.3's measured 41¢/gal daily swing is the signal to forecast against.
 - "Wait a day" recommendations when prices trend down.
 - Hours-of-service-aware stop placement.
+- **Range-derived leg window (§5.6).** Replace the flat 500/300 with a cap computed from tank, MPG and a reserve buffer. Depends on Phase 3 producing a trustworthy MPG, and on a truck existing whose range actually falls below the policy cap.
 - More complex optimiser strategies dropped into the registry — no orchestration changes needed (§13.1).
 - Possible move to self-hosted routing, which eliminates retention caps but needs a persistent box.
 
@@ -1596,6 +1677,7 @@ These need answers before the steps that depend on them. None blocks step 1 exce
 | **Q6** | **Does this count as business use for Vercel?** | §10, $20/mo | Almost certainly yes. Budget for Pro. |
 | **Q7** | **Ten-year backfill: all of it, or a recent window?** | §11.2, storage | Start with January 2026 (on disk). Extend once the pipeline is proven. 2.2M rows is not a storage problem; it is a "do not do it before it works" problem. |
 | **Q8** | **Is `min_leg_miles = 300` right, or was 350 better?** | §5.1 | 300 is the current decision. It was 350 through v3.3. The value is a profile column, not a constant — so this is tunable per truck rather than a one-way door. |
+| **Q9** | **Where does the 500-mile cap come from — driver hours and stop cadence, or an assumption about range?** | §5.6 | Ask dispatch. If it is a policy rule it stays a constant and §5.6 is never worth building; if it is a range proxy, §5.6 replaces it once Q4 has a real MPG. |
 
 ---
 
@@ -1641,7 +1723,7 @@ All 605 stations are Love's with distinct store numbers, and the operator's own 
 
 ### 22.9 Python for the ingest pipeline — rejected
 
-See §7.1 for the full reasoning. Short version: the ingest must run behind both an HTTP endpoint and a CLI on a Vercel deployment, and it shares validation rules with the API. Python is permitted and encouraged for one-time analysis whose output is data rather than code.
+See §7.1 for the full reasoning. Short version: the ingest shares validation rules and types with the API, and must run in-process on a Vercel deployment once the upload route and the Gmail poller land. **v1's CLI-only ingest (§11.2) weakens this — a standalone CLI is the one shape Python would handle comfortably — but it does not overturn it, because the CLI is not the ingest's last caller.** Python remains permitted and encouraged for one-time analysis whose output is data rather than code.
 
 ---
 

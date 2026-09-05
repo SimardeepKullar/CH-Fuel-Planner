@@ -102,8 +102,9 @@ Six rows, all per-stop. All already in §14's `stops[]`:
 §14 declares `candidateStations` as a comment stub. **Its shape has to be
 specified** — at minimum: `id`, `name`, `city`, `state`, `location`,
 `unitPriceUsd`, `distanceAlongRouteMiles`, `detourMiles`. The design uses it for
-two things: the green dot layer, and the count in the "show all sheet stations"
-button.
+three things: the candidate dot layer, the in-corridor-not-selected layer and
+its count (§3.8), and the cheapest-along-route chart (§3.7). Each candidate must
+carry a stable `id` so the frontend can diff it against `stops[]`.
 
 ### 3.4 Lane form
 
@@ -167,14 +168,30 @@ by `unitPriceUsd`. Two things need deciding:
   stops, which suggests the former.
 - Is N fixed at 5, or a parameter?
 
-### 3.8 "Show all sheet stations on map (412)"
+### 3.8 Map layer toggles — two buttons
 
-The button label carries a count. In the placeholder it is `sheetStationCount`,
-a constant. It should be the number of stations actually plotted — i.e.
-`candidateStations.length` — **not** the sheet's total row count, which would be
-thousands and would not match what the toggle reveals. If the intent really is
-"every station on the sheet", that is a different and much larger layer and
-needs its own bbox-paged endpoint (`GET /stations`, already in §14).
+The map panel carries a pair of toggle buttons side by side, each with a count
+in its label. They reveal two different, non-overlapping layers:
+
+| Button | Layer | Count | Needed from backend |
+|---|---|---|---|
+| `Show all sheet stations on map (412)` | every priced station on the selected sheet | sheet station count | `stationCount` from `GET /price-sheets` for the selected sheet, and the points themselves from a bbox-paged `GET /stations` (§14) scoped to the sheet |
+| `Show in-corridor not selected (37)` | corridor candidates the solver considered but did **not** choose | candidates minus chosen | `candidateStations[]` filtered to those whose `id` is not in `stops[].station.id` |
+
+The distinction matters because the two counts come from different places and
+must not be conflated: the first is the whole sheet (thousands, paged, mostly
+nowhere near the lane), the second is the solver's own consideration set with
+the chosen stops removed. Previously one button carried a `sheetStationCount`
+constant doing both jobs.
+
+Rendering: sheet stations are plotted as small green dots, in-corridor-not-
+selected as amber-ringed hollow dots, chosen stops as the numbered accent pins.
+Both candidate layers share the §3.3 hover card; the in-corridor layer's card
+adds the qualifier "in corridor, not selected", so `candidateStations[]` should
+carry enough to say *why* a station was passed over — at minimum
+`detourMiles` and `unitPriceUsd`, ideally a short `rejectionReason`
+(`price`, `detour`, `leg length`, `max stops`) if the DP can cheaply emit one.
+That reason is **new** and optional; without it the label stays generic.
 
 ### 3.9 Recommended order
 
@@ -194,6 +211,22 @@ fill.
 **Open** and **Copy**. The `GOOGLE_LINK_NOT_TRUCK_LEGAL` disclaimer that §14
 always emits has **no home in this design** — the card's footnote is generic
 marketing copy, not the warning. Somewhere in this card needs to carry it.
+
+**"Sent to driver" checkbox.** The card's footer row now ends in a checkbox
+marking whether this plan has been handed to the driver. It is dispatcher
+bookkeeping, not a solve output, and it must persist — a dispatcher who ticks
+it, leaves and reopens the plan has to see it still ticked. Needs:
+
+- `sentToDriver: boolean` on `GET /plans/{id}`.
+- A write path — `PATCH /plans/{id}` with `{ sentToDriver }`, ideally recording
+  `sentToDriverAt` and the acting user so the Recent table can show *when*.
+- A decision on whether ticking it is purely a flag or should also mean
+  something (freeze the plan, stop re-pricing, emit a notification). The design
+  assumes a flag only.
+
+This also interacts with §4's status question: "sent to driver" is a third axis
+alongside solve status and trip lifecycle. It is deliberately a checkbox rather
+than a status badge for that reason.
 
 ---
 
@@ -315,7 +348,9 @@ Ordered by how much of the UI is blocked on it.
 9. **`GET /trucks`** returning fleet units for the header selector, plus the
    truck-number type fix.
 10. **Resolved origin/destination coordinates** echoed on the plan response.
-11. **Session identity** for the header chip, if auth lands in v1.
+11. **`sentToDriver`** on the plan response, plus a `PATCH /plans/{id}` to set
+    it (and `sentToDriverAt` for the Recent table).
+12. **Session identity** for the header chip, if auth lands in v1.
 
 ---
 
@@ -330,8 +365,13 @@ Ordered by how much of the UI is blocked on it.
   badge.
 - **"Cheapest along route" set** — corridor candidates only, or candidates plus
   chosen stops? Fixed at five?
-- **"All sheet stations" scope** — corridor candidates, or every station on the
-  sheet as a paged bbox layer?
+- **"All sheet stations" scope** — confirmed as every station on the selected
+  sheet, which means the paged bbox layer is required; the corridor set is now
+  the *other* button. Is the sheet layer worth paging, or should it be capped to
+  the route bbox?
+- **Rejection reasons** — can the DP cheaply say why a corridor candidate was
+  not chosen, or does the in-corridor layer stay unexplained?
+- **`sentToDriver` semantics** — flag only, or does it lock the plan?
 - **Action-label rules** — what makes a stop a "top-off" vs "reserve" vs a named
   gallon amount.
 - **IFTA registration**, which decides the default price basis. Unresolved in
@@ -352,8 +392,11 @@ express them:
   one entry on every plan. The design surfaces none of them.
 - Empty states: no recent trips, no candidates in corridor, no price sheet
   imported yet.
-- Loading state while a solve runs. `POST /plans` is asynchronous in §14's shape
-  (create, then fetch), so this is required, not optional.
+- Loading state while a solve runs. `POST /plans` is synchronous (§14, revised) —
+  one request, 3–10s, the finished plan comes back in the response — so this is
+  a plain "request in flight" spinner around that single `fetch()`, not a poll
+  against a job status. Still required: 3–10s is long enough that the UI cannot
+  render nothing.
 - Error states for a failed geocode or a routing-provider outage.
 
 These are design work, not backend work — but the payloads above will arrive
