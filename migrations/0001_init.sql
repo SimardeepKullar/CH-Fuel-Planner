@@ -66,13 +66,13 @@ CREATE TABLE trucks (
 	id               bigserial PRIMARY KEY,
 	truck_number     integer NOT NULL UNIQUE,  -- e.g. 247 — the fleet unit number
 
-	-- ORS profile_params.restrictions — metres/tonnes, matches src/routing/ors.ts
+	-- Truck dimensions and weight
 	height_m         numeric(4,2) NOT NULL,
 	width_m          numeric(4,2) NOT NULL,
 	length_m         numeric(5,2) NOT NULL,
 	weight_t         numeric(5,2) NOT NULL,
 
-	-- Fuel model — same fields runPlan.ts currently hardcodes in FUEL_MODEL
+	-- Fuel model
 	tank_gallons     numeric(6,1) NOT NULL,
 	avg_mpg          numeric(4,2) NOT NULL,
 	reserve_fraction numeric(4,3) NOT NULL DEFAULT 0.100,

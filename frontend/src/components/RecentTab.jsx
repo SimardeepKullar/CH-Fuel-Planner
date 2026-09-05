@@ -1,7 +1,10 @@
+import Corners from "./Corners.jsx";
+
 export default function RecentTab({ trips, currentTripId, onOpenTrip }) {
   return (
     <section className="panel">
-      <div className="panel-card">
+      <div className="panel-card blueprint">
+        <Corners />
         <div className="panel-card-header">
           <div className="panel-card-title">Recent trips</div>
           <span className="panel-card-sub">click a trip to open its plan</span>
@@ -24,18 +27,21 @@ export default function RecentTab({ trips, currentTripId, onOpenTrip }) {
               return (
                 <div
                   key={t.id}
-                  className={`trip-item${isCurrent ? " current" : ""}`}
+                  className={`trip-row trip-item${isCurrent ? " current blueprint" : ""}`}
                   onClick={() => onOpenTrip(t.id)}
                 >
-                  <div className="trip-row">
-                    <span className="trip-id">{t.id}</span>
-                    <span className="trip-date">{t.date}</span>
-                    <span className="trip-route">{t.source} → {t.dest}</span>
-                    <span>{t.miles}</span>
-                    <span className="trip-truck">{t.truck}</span>
-                    <span className="trip-save">{t.save}</span>
-                    <span className={`tag ${isCurrent ? "tag-outline" : "tag-neutral"}`}>{t.status}</span>
-                  </div>
+                  {isCurrent && <Corners />}
+                  <span className="trip-id">{t.id}</span>
+                  <span className="trip-date">{t.date}</span>
+                  <span className="trip-route">{t.route}</span>
+                  <span>{t.miles}</span>
+                  <span className="trip-truck">{t.truck}</span>
+                  <span className="trip-save">{t.save}</span>
+                  <span className="trip-status">
+                    <span className={`tag ${isCurrent ? "tag-outline" : "tag-neutral"}`}>
+                      {t.status}
+                    </span>
+                  </span>
                 </div>
               );
             })}

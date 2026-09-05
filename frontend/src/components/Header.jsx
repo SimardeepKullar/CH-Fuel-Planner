@@ -4,7 +4,14 @@ const TABS = [
   { key: "dev", label: "Dev Tools" },
 ];
 
-export default function Header({ activeTab, onTabChange, truck, tripId }) {
+export default function Header({
+  activeTab,
+  onTabChange,
+  trucks,
+  truck,
+  onTruckChange,
+  tripId,
+}) {
   return (
     <>
       <header className="topbar">
@@ -22,14 +29,33 @@ export default function Header({ activeTab, onTabChange, truck, tripId }) {
             {tab.label}
           </button>
         ))}
+
+        {/* Placeholder identity — no auth wired up yet. */}
+        <div className="user-chip">
+          <div className="user-chip-id">
+            <span className="user-chip-name">M. Hodson</span>
+            <span className="user-chip-role">Dispatch</span>
+          </div>
+          <button className="signout-btn">Sign out</button>
+        </div>
       </header>
 
       <div className="subbar">
         <div className="subbar-title">Fleet · route fuel</div>
         <div className="subbar-tags">
-          <span className="tag tag-outline">{truck}</span>
+          <select
+            className="input truck-select"
+            value={truck}
+            onChange={(e) => onTruckChange(e.target.value)}
+          >
+            {trucks.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
           <span className="tag tag-neutral">Diesel</span>
-          <span className="tag tag-accent">{tripId}</span>
+          <span className="tag tag-accent trip-tag">{tripId}</span>
         </div>
       </div>
     </>

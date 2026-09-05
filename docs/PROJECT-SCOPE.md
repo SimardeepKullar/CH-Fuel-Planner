@@ -1,0 +1,1684 @@
+# Truck Route + Cheapest Fuel Stop Planner — Project Scope
+
+**Organisation:** 2043733 ONTARIO INC., DBA CH LOGISTICS
+**Document version:** 1.0 — 4 September 2026
+**Supersedes:** `PROJECT-SCOPE.md` v3.4 (the copy in `~/Downloads`, now archived)
+
+---
+
+## How to read this document
+
+This is a rewrite from scratch, using v3.4 as the source material. It exists because v3.4 described a finished v1 — nine shipped milestones, 54 passing tests, a deployed frontend — and none of that code is in this repository. Reading it as a status report was misleading.
+
+This document separates three things that v3.4 ran together:
+
+| Marker | Meaning |
+|---|---|
+| **Verified** | Measured against the files in `data/` on 4 September 2026. Reproducible. |
+| **Decided** | A choice made with a stated reason. Change it deliberately, not by drift. |
+| **Open** | Not yet decided. Listed in §21. Needs an answer before the affected step is built. |
+
+
+---
+
+## Table of contents
+
+1. [What the app does](#1-what-the-app-does)
+2. [Where the project actually stands](#2-where-the-project-actually-stands)
+3. [Scope boundaries](#3-scope-boundaries)
+4. [The data](#4-the-data)
+5. [The fuel model](#5-the-fuel-model)
+6. [Decisions locked in](#6-decisions-locked-in)
+7. [Tech stack](#7-tech-stack)
+8. [Routing provider](#8-routing-provider)
+9. [Map rendering](#9-map-rendering)
+10. [Deployment and infrastructure](#10-deployment-and-infrastructure)
+11. [Data pipeline](#11-data-pipeline)
+12. [Database schema](#12-database-schema)
+13. [Service boundaries](#13-service-boundaries)
+14. [API design](#14-api-design)
+15. [The stop-selection algorithm](#15-the-stop-selection-algorithm)
+16. [Truck profiles](#16-truck-profiles)
+17. [Data retention and licensing](#17-data-retention-and-licensing)
+18. [Known risks and gaps](#18-known-risks-and-gaps)
+19. [Build order](#19-build-order)
+20. [Future phases](#20-future-phases)
+21. [Open questions](#21-open-questions)
+22. [Rejected approaches](#22-rejected-approaches)
+23. [Sources](#23-sources)
+
+---
+
+## 1. What the app does
+
+A dispatcher enters a load — origin, destination, and which truck is running it. The app returns:
+
+1. A **baseline truck-legal route** from A to B.
+2. The **cheapest diesel stations** along or near that route, from the BVD price sheet for the specific effective day.
+3. An **optimised route** inserting selected stations as mandatory stops, respecting the 500-mile operational cap as a hard constraint (may be altered to optimize it based on truck mpg and when it will empty with a buffer) while minimising total fuel cost.
+4. **Map data** for both routes plus station markers.
+5. A **summary table** of stops with gallons, price, cost, and cumulative distance and duration.
+6. A **shareable Google Maps link** the dispatcher sends to the driver.
+
+### The process being replaced
+
+The dispatcher has the load's origin and destination, puts both into Google Maps, and sends the driver a link. The BVD CSV sits alongside as a rough guide to where fuel is cheap. Drivers fill up largely where they feel like it and follow the guide loosely. There is no range checking, no cost optimisation, and no record of what was chosen or what it cost.
+
+### Who uses it
+
+One dispatcher, planning loads ahead of time. Drivers receive a Google Maps link but do not log in.
+
+### The operating pattern
+
+Trucks leave a yard in Canada and are **required to fill up at a station immediately before the US border**. The Canadian leg is negligible — the station sits beside the crossing. **Every US trip therefore begins at 100% fuel from a US origin point.** This is always the case, so it is the modelled default rather than an assumption to guard against.
+
+### Why it is worth building
+
+Verified from the 2026-08-22 sheet: the spread between the cheapest and dearest station is **$2.184/gal**, and within a single state it reaches **63¢/gal** (Colorado). A 60¢ spread on a 90-gallon fill is **~$54 per stop**. At two or three stops per trip, run daily, the optimisation pays for itself many times over.
+
+---
+
+## 2. Where the project actually stands
+
+Verified by inspection of the repository on 4 September 2026.
+
+### What exists
+
+| Path | What it is | State |
+|---|---|---|
+| `migrations/0001_init.sql` | 79 lines. `stations`, `price_imports`, `station_prices`, `routes`, `trucks` | **Does not run** — syntax error, see §12.1 |
+| `docker-compose.yml` | `postgis/postgis:16-3.4` on port 5433, migrations mounted as init scripts | Works |
+| `frontend/` | Vite + React 19. `App.jsx` with Plan / Recent / Dev tabs, ~400 lines total | **Static mock** — reads `src/data/trips.js`, no API, no map |
+| `data/bvd/pcn-usd-9206810-981.csv` | The 2026-08-22 sheet, 605 rows | Present |
+| `data/bvd/2026-01/` | 31 files covering 30 days of January 2026 | Present |
+| `data/loves/LovesSearchResults.xlsx` | Love's operator export, 732 stores with coordinates | Present |
+| `package.json` | Workspace root, `db:*` scripts, frontend workspace | Works |
+
+### What does not exist
+
+No `src/`. No backend of any kind. No ingest, no routing adapter, no corridor que ry, no optimiser, no API, no tests, no auth, no map. `package.json` declares no dependencies beyond React and Vite.
+
+**The project is at step 1 of §19, partially done.** The schema is drafted but does not apply cleanly; the frontend mock is a useful UI reference but is not wired to anything.
+
+### The frontend mock is worth keeping
+
+`frontend/src/data/trips.js` is hardcoded sample data shaped roughly like a plan. Treat it as a **design artefact, not a stub to fill in** — it records what the dispatcher expects to see, which is real input to §14's payload design. Expect to rewrite the components once the API exists.
+
+---
+
+## 3. Scope boundaries
+
+### In scope for v1
+
+- Single origin → single destination (A→B), US only
+- Origin assumed at 100% fuel (adjustable)
+- Three truck profiles (Volvo-based)
+- One supplier (BVD), one product (ULSD)
+- Manual CSV upload, plus CLI bulk backfill
+- Single user with login
+- Cost minimisation under the 500-mile operational cap
+- Styled, interactive map with both routes and hoverable station pins
+- Google Maps link output for drivers
+
+### Out of scope for v1, designed for
+
+| Feature | What makes it additive later |
+|---|---|
+| Multi-stop deliveries (A→B→C) | `plan_stops.seq` and `stop_type` shaped for it |
+| Round trips (A→B→A) | Needs joint cross-leg optimisation |
+| Canada lanes | A second BVD CSV exists in the same format; see §20 |
+| User-defined truck profiles | An INSERT, not a migration |
+| Automated Gmail ingest | `price_imports` is the seam |
+| Additional fuel suppliers | `supplier` columns throughout |
+| Receipt vs. plan backtesting | Driver invoices first, OCR second |
+| Metrics dashboards | Depends on accumulated history |
+| Price forecasting | Depends on the historical backfill |
+| Hours-of-service integration | `stop_type` enum reserves space |
+
+### Not being built
+
+- Turn-by-turn navigation
+- Multi-vehicle fleet optimisation
+- Load/dispatch management — this is not a TMS
+- IFTA tax modelling (§4.7 records what is retained in case this changes)
+
+---
+
+## 4. The data
+
+**Every figure here was re-measured on 4 September 2026** against `data/bvd/`, using a throwaway pandas script. All of v3.4's claims held exactly. The findings in §4.3 are new — v3.4 never analysed the January corpus.
+
+### 4.1 The file
+
+`pcn-usd-9206810-981.csv`, arriving daily by Gmail from BVD.
+
+**Line 1 is metadata, not a header:**
+
+```
+"Company Id: ",981," ","Company Name: ","2043733 ONTARIO INC."," ",DBA,"CH LOGISTIX"," ","Effective Date: ",2026-08-22
+```
+
+Parse it for `company_id` and `effective_date`, then skip it. The DBA reads `CH LOGISTIX` with an X because that is the name on file with the fuel supplier; the org's own spelling is CH LOGISTICS. Do not "correct" it on the way in — it is what the supplier sends, and the ingest's job is to record what arrived.
+
+**Line 2 is the header**, 15 columns:
+
+`SITE, NAME, CITY, STATE, PROD, COST, FEDERAL TAX, STATE TAX, SALES TAX, FREIGHT, OTHER, TOTAL COST, RETAIL PRICE, YOUR PRICE, SAVINGS`
+
+**605 data rows, zero nulls** in the August file.
+
+**Effective date semantics.** The file arrives on day *N* and its header states day *N+1*. The August file arrived 21 Aug with a header of 2026-08-22. **Trust the header field directly; no +1 offset logic in code.** The pattern holds on weekends.
+
+### 4.2 Verified facts — the August sheet
+
+Every claim tested against all 605 rows.
+
+| Finding | Detail |
+|---|---|
+| **`SITE` is unique** | 605 distinct values in 605 rows. Valid natural key. |
+| **`SITE` ≠ Love's store number** | Matches in **0 of 605**. `SITE` is BVD's internal ID; the store number is in `NAME` (`LOVES #368`), range 22–1055, all 605 distinct. |
+| **One product** | `PROD = ULSD` in every row. |
+| **One brand** | 605/605 Love's. |
+| **Columns sum exactly** | `COST + FEDERAL + STATE + SALES + FREIGHT + OTHER = TOTAL COST`, max diff 0.0005. |
+| **`YOUR PRICE = min(TOTAL COST, RETAIL PRICE)`** | **605/605, zero error.** |
+| **`SAVINGS = max(0, RETAIL − TOTAL COST)`** | **605/605, zero error.** |
+| **30 rows capped at retail** | Contract cost exceeds street price → you pay street, zero savings. CA, FL, GA, ID, IL, MT, NV, SC, WA. |
+| **`FEDERAL TAX` constant** | 0.2483 in every row. |
+| **`STATE TAX` constant within state** | Zero states have more than one value. A lookup, not a per-station fact. |
+| **`SALES TAX` mostly zero** | Nonzero in 65 rows: IL (37), CA (16), WA (7), NY (5). |
+
+**The optimiser reads `YOUR PRICE` directly and never recomputes it.** The `min()` cap is a BVD business rule that only they can apply.
+
+### 4.3 Verified facts — the January corpus (new in v1.0)
+
+31 files in `data/bvd/2026-01/`. These change three things, and give the ingest two real test cases before a line of it is written.
+
+| Finding | Detail | Consequence |
+|---|---|---|
+| **Format is stable** | All 31 files share one identical header shape | The validation gate can be strict rather than forgiving |
+| **594 rows each, not 605** | Every January file has 594 stations; August has 605 | The station network grows. Ingest must handle stations appearing. |
+| **January ⊂ August** | 0 January sites absent from August; 11 August sites absent from January | Growth, not churn. Nothing was dropped in 8 months. |
+| **Site set is stable within the month** | All 31 files carry the identical 594-site set | Day to day the network does not move. |
+| **2026-01-11 is missing** | Dates run 01-01 to 01-31, 30 distinct, one gap | **Gap detection is not hypothetical.** It fires on the first real backfill. |
+| **2026-01-26 arrives twice** | `pcn-usd-8097639-981.csv` and `… (1).csv` are **byte-identical** (same SHA-256) | **The `file_sha256` idempotency guard has a real test case on day one.** |
+| **Prices move daily** | Per-station price range across January: median **$0.408**, p90 **$0.567**, max **$0.682** | Confirms "always re-plan" (§11.6). Yesterday's answer carries ~41¢/gal of error. |
+| **The cheapest station changes** | Only **4 distinct stations** were network-cheapest across the 30 days | Concentrated, but not fixed. Nothing to hardcode. |
+
+The last two together are the quantitative case for the whole project: a 41¢ median daily swing per station means a plan computed against stale prices is materially wrong, and there is no shortcut that avoids re-running the optimisation.
+
+### 4.4 Geographic coverage
+
+**42 states.** Absent: `AK, DE, HI, MA, ME, NH, RI, VT`.
+
+**Densest:** TX (84), IL (37), OK (37), OH (29), MO (25), FL (23), IN (23), MS (21).
+
+**Thin — range-gap risk:** CT (1), NJ (1), WV (1), MD (2), SD (3), ID (4), MN (4), MT (4).
+
+With a 500-mile hard cap between fills, lanes through the Northeast or the northern Mountain states can genuinely fail. **The infeasible response must be actionable, not a bare error** — see §14.
+
+### 4.5 City/state ambiguity — small
+
+593 distinct `(city, state)` pairs across 605 rows. **Only 9 pairs hold more than one station**, covering 21 rows — **3.5%**:
+
+Jacksonville FL (3), Amarillo TX (3), Oklahoma City OK (3), Prescott AR (2), Fort Pierce FL (2), Albuquerque NM (2), Houston TX (2), Lufkin TX (2), Van TX (2).
+
+The Love's store number in `NAME` disambiguates all of them. This matters only for the gazetteer fallback (§11.4 step 3); tier 1 resolves by store number and never consults the city.
+
+### 4.6 City string hygiene
+
+- **25 ALL-CAPS** rows (`ELOY`, `BRIGHTON`, `TRINIDAD`, `LAUREL`, …) — normalise case.
+- **5 abbreviated prefixes:** `Mc Calla`, `Mt Juliet`, `Mt Vernon`, `N Little Rock`, `St Augustine` — expand before gazetteer matching.
+
+Store both: `city_raw` as received, `city_normalized` for matching. Never overwrite what the supplier sent.
+
+### 4.7 Price distribution and basis
+
+| Metric | `YOUR PRICE` ($/gal) |
+|---|---|
+| Min | 4.865 |
+| p25 | 5.079 |
+| Median | 5.193 |
+| p75 | 5.377 |
+| Max | 7.049 |
+| **Spread** | **$2.184** |
+
+**Discount vs street:** mean 44.6¢/gal, median 49.5¢/gal, max $1.108/gal, zero in 30 rows.
+
+**Decided: use `YOUR PRICE` (the `pump` basis). IFTA modelling is out of scope.**
+
+Recorded because it was analysed and may matter later: ranking stations by pump price versus tax-stripped cost gives a Spearman correlation of ~0.52, with only 7 of the 50 cheapest stations shared between the two bases. Illinois is the clearest divergence — cheap on a tax-stripped basis, above median at the pump.
+
+The `price_ifta_net` generated column stays in the schema. It costs nothing, needs no code, and makes switching basis later a parameter change rather than a migration.
+
+---
+
+## 5. The fuel model
+
+This section governs the algorithm.
+
+### 5.1 The operational cap
+
+**The truck must never travel more than 500 miles between fuel purchases.** This is operational policy, not a tank limit — it binds well before physical range does. A 150-gallon tank at 6.5 mpg is 975 miles nominal; every profile in §16 comfortably exceeds 500.
+
+**There is also a hard 300-mile minimum between fuel purchases.** Stopping sooner is not wanted — a stop has fixed overhead and a near-full tank has nowhere to put the fuel.
+
+**The minimum does not apply to the final leg.** You do not buy fuel at the destination, so the last fill only needs to be within 500 miles of arrival; there is no floor on how close it can be. This is a frequent source of off-by-one bugs — it has a dedicated test in §15.6.
+
+**Automatic relaxation on infeasibility.** A hard floor can declare a trip impossible that the truck could physically make: if no station sits in the 300–500 mile window from origin, the plan fails even though the truck could comfortably reach mile 600. The planner therefore runs two passes:
+
+1. Solve with `min_leg_miles = 300`.
+2. If infeasible, re-solve with `min_leg_miles = 0` and attach a `MIN_LEG_RELAXED` disclaimer naming which legs fall short.
+
+A plan with a 280-mile leg and a clear warning is more useful to a dispatcher than a dead end.
+
+### 5.2 What prevents excessive stopping
+
+The 300-mile floor is the primary control — it structurally rules out clusters of short hops. A secondary per-stop cost shapes the choice between otherwise-valid alternatives:
+
+```
+stop_penalty = fixed_stop_minutes × (driver_cost_per_hour / 60)
+             + detour_distance_miles × cost_per_mile
+             + detour_duration_hours × driver_cost_per_hour
+```
+
+With `driver_cost_per_hour = 0` this reduces to pure fuel-cost minimisation, which is the v1 default and is safe because the floor does the structural work. Raising the driver rate later makes the optimiser prefer fewer stops and shorter detours. Revisit once real plans are being compared against real outcomes — not before, because until then there is nothing to tune against.
+
+### 5.3 Starting and ending conditions
+
+- **Start:** 100% fuel. `startFuelGallons` is an API parameter defaulting to tank capacity.
+- **Origin counts as a fill.** The first stop must therefore be within 500 miles of the origin.
+- **Arrival:** by default the destination must be within 500 miles of the last fill (`requireArrivalWithinMaxLeg = true`, configurable). Minimum arrival fuel defaults to the reserve level.
+
+### 5.4 Why carrying fuel forward matters
+
+Because the minimum leg can be relaxed and the cap forces stops regardless of need, surplus fuel has value. If a cheap station sits at mile 100 and an expensive one at mile 550, the optimiser can fill at 100, stop at 550 as the cap requires, and buy little or nothing there.
+
+**This is why the algorithm needs a fuel-level dimension** and cannot be a plain shortest path over stop positions. It is the single most important structural fact about §15.
+
+### 5.5 Parameters
+
+| Parameter | Default | Lives in |
+|---|---|---|
+| `max_leg_miles` | 500 | truck profile |
+| `min_leg_miles` | 300 | truck profile; auto-relaxed to 0 on infeasibility |
+| `tank_gallons` | per profile | truck profile |
+| `avg_mpg` | per profile | truck profile |
+| `reserve_fraction` | 0.15 | truck profile |
+| `fixed_stop_minutes` | 20 | truck profile, overridable per plan |
+| `driver_cost_per_hour` | 0 | per plan |
+| `cost_per_mile` | 0 | truck profile, overridable per plan |
+| `startFuelGallons` | tank capacity | per plan |
+| `maxStops` | null | per plan |
+
+---
+
+## 6. Decisions locked in
+
+| # | Decision | Rationale |
+|---|---|---|
+| 1 | A→B, US only, for v1 | Multi-stop and Canada are additive |
+| 2 | Start at 100% fuel | Mandatory pre-border fill; always the case |
+| 3 | 500-mile hard cap between fills | Operational policy; binds before tank capacity |
+| 4 | Hard 300-mile minimum leg, auto-relaxed on infeasibility | Avoids pointless short hops without creating dead ends |
+| 5 | Exact DP over `(station, fuel level)` | Small problem; optimal beats heuristic (§22.3) |
+| 6 | Optimiser is a swappable strategy | Explicit modularity requirement |
+| 7 | `YOUR PRICE` as the price basis | IFTA out of scope; `price_ifta_net` retained |
+| 8 | Trust the CSV header's effective date | Confirmed against real files |
+| 9 | Single user with login | Auth.js, one seeded account |
+| 10 | **TypeScript for everything that runs in production** | §7.1 |
+| 11 | Vercel + Neon Postgres/PostGIS | §10 |
+| 12 | OpenRouteService for v1, HERE deferred behind an interface | §8.2 |
+| 13 | MapLibre GL JS for rendering | Full styling control, free |
+| 14 | Google Maps link as driver output | Matches the existing workflow |
+| 15 | Manual CSV upload in v1 | Gmail poller becomes another caller later |
+| 16 | Store miles + gallons; convert at the API boundary | `?units=metric` toggle |
+| 17 | Permanent station coords from operator export, OSM and Census only | Provider geocoding has a 30-day cap (§17) |
+| 18 | Structured logging on every provider call | Keyed by request hash |
+| 19 | No job queue in v1 | Computation fits inside function limits |
+
+---
+
+## 7. Tech stack
+
+**Node 22 + TypeScript + Next.js route handlers + Drizzle or Kysely + Postgres/PostGIS + Zod.**
+
+| Concern | Pick |
+|---|---|
+| HTTP | Next.js route handlers |
+| ORM / query builder | Drizzle or Kysely (Prisma needs raw SQL for PostGIS anyway) — **Open, §21 Q1** |
+| Validation | Zod |
+| CSV | `csv-parse` or `papaparse` |
+| XLSX (one-time, operator export) | `xlsx` or a Python script — see §7.1 |
+| Auth | Auth.js |
+| Logging | `pino` |
+| Map | MapLibre GL JS |
+| Tests | `vitest` |
+
+**Why TypeScript.** The geospatial work happens in Postgres (`ST_LineLocatePoint`, `ST_DWithin`), not in application code. The optimiser is a few hundred lines of array manipulation. CSV parsing is trivial at 605 rows. And shared types with the React frontend give compile-time guarantees across the boundary in one repository.
+
+### 7.1 The Python question — decided
+
+Python was considered for the ingest pipeline. **Decision: TypeScript for the ingest, Python permitted for one-time analysis.** The rule:
+
+> **Anything that runs in production, repeatedly, goes in TypeScript. One-time analysis whose deliverable is rows in a table, not code, may be written in whatever is fastest.**
+
+**Why the ingest is TypeScript, specifically:**
+
+1. **It is not a data-processing problem.** 605 rows per file; the full ten-year backfill is roughly 2.2M rows of flat CSV with zero nulls and 15 columns. Nothing pandas offers beats `csv-parse` and a loop at that size.
+2. **§11.2 needs one ingest behind two entry points** — `POST /api/v1/imports/batch` and `npm run backfill`. This is the deciding constraint. A Python ingest means the HTTP path either shells out to a subprocess from a Next route handler, or becomes a second deployed service with its own connection pool and env vars. Two runtimes, no benefit.
+3. **The validation rules are shared with the API.** §11.1 step 4 validates the same shapes the API later reads back. One Zod schema means the rule exists once; two languages means maintaining it twice, by hand, with silent drift.
+4. **Deployment is Vercel + Neon.** There is nowhere for a Python worker to live under the current plan.
+
+**Where Python is the better tool, and is allowed:**
+
+- **§11.4 station resolution.** Clustering OSM fuel features, matching store numbers, parsing the Census Gazetteer. Exploratory geospatial work with a lot of look-adjust-look; geopandas and shapely genuinely beat TypeScript on iteration speed. Its output is coordinates in the `stations` table, and nothing in the app imports it.
+- **Data analysis.** §4's verification was done in pandas, which is the right call and took minutes.
+- **Phase 3 backtesting and Phase 4 forecasting** (§20), for the same reason.
+
+**What is not allowed:** writing the backfill in Python "just for the CLI path" while the endpoint is TypeScript. Two implementations of the same ingest is two chances to disagree about what a valid row is, and the `file_sha256` idempotency in §11.2 only protects you if both paths produce identical results.
+
+Any Python that is written lives in `scripts/` with a `requirements.txt`, is run by hand, and is never imported by application code.
+
+---
+
+## 8. Routing provider
+
+### 8.1 Options considered
+
+| # | Option | Truck routing | Free tier | Verdict |
+|---|---|---|---|---|
+| 1 | **HERE Routing v8** | Native, commercially maintained | ~5k routing + 2.5k matrix/mo | **Deferred, not rejected** — best US truck data. Card required. |
+| 2 | Google Routes + Large Vehicle Routing | Native (GA 17 Aug 2026) | Up to 10k/SKU/mo | Strong; very new. Second adapter if needed. |
+| 3 | **OpenRouteService** | `driving-hgv`, OSM-derived | 2k directions + 500 matrix **per day**, no card | **Chosen for v1** — see §8.2 |
+| 4 | GraphHopper Directions API | Truck profiles | Unverified | No advantage here. |
+| 5 | Self-hosted GraphHopper | Yes | Free | Needs a persistent ~12–15 GB box. Not v1. |
+| — | Mapbox | None | — | Ruled out. |
+
+**Ruled out as oversized:** HERE Tour Planning, Waypoints Sequence, Route Optimization. Those solve multi-vehicle fleet assignment. This project needs `route` and `matrix`.
+
+### 8.2 Why v1 ships on ORS, not HERE
+
+HERE remains the better truck-data product. It is deferred because **v1 cannot cash in that advantage.**
+
+**Quota is not the reason.** ORS's free tier is the more generous by an order of magnitude — 2,000 directions/day against HERE's ~5,000/month. At §8.3's ~4 transactions per plan, HERE allows ~1,250 plans/month and ORS ~500 plans *per day*. One dispatcher runs a handful. Both are far past sufficient.
+
+**The reason is that v1's truck-legality gap is downstream, not upstream.** HERE's advantage is coverage of low bridges and weight limits in its road data. But §9.4 sends the driver a **Google Maps car route**: correct stops, unchecked roads. So in v1 the routing provider's truck data determines:
+
+- distance and duration estimates → gallons → dollars ✅
+- which stations fall inside the corridor ✅
+- **not** the roads the driver actually drives ❌
+
+Paying for better upstream truck data while the downstream link is a car route closes the gap at one end of the pipeline only.
+
+**What deferring buys.** No card, no account, and — because ODbL carries no storage cap — the 30-day retention job becomes optional rather than mandatory. That is real engineering work avoided.
+
+**The named trigger for revisiting.** Adopt HERE when either becomes true:
+
+1. The app ships **truck-legal turn-by-turn to drivers** rather than a Google link. At that point the routing data becomes safety-critical and HERE's maturity is worth paying for.
+2. A coverage probe against known low-clearance and weight-restricted locations shows ORS missing restrictions at a material rate.
+
+**This is deliberately cheap to reverse.** The provider interface (§8.4) exists for exactly this: adopting HERE is one new adapter file plus one case in a factory, with no caller changed. Nothing downstream — corridor query, optimiser, validation loop, API — knows which provider produced a route.
+
+### 8.3 Cost and the budget guard
+
+One plan ≈ 2 route calls + 1 matrix call, plus 1–2 if the validation loop iterates. Call it 4 transactions. **Expected spend: $0.**
+
+The real risk is a retry loop, not ordinary use. **Build the budget guard in v1** — a persisted counter that throws once a monthly ceiling is hit. Not a log line; an error that stops the call.
+
+#### There are two meters, and they measure different things
+
+| | Ours — `provider_usage` | Theirs — `provider_quota` |
+|---|---|---|
+| What | A monthly **spend** ceiling | The provider's own **rate** limit |
+| Scope | Pooled across every endpoint | A separate pool per endpoint |
+| Who enforces it | We do — the guard throws on call N+1 | They do; we only observe it |
+| Where it comes from | Counted as calls are reserved | The `x-ratelimit-remaining` response header |
+| Period | Calendar month, UTC | **Not stated by the provider** |
+
+**Do not conflate them.** A month's budget can be almost untouched while the endpoint pool the next plan needs is three calls from empty. A single "calls remaining" figure would hide whichever is about to bite. Show both, separately.
+
+**The provider does not say what window its rate limit covers, so neither should we.** `x-ratelimit-limit` is a bare number. Store the number and the moment it was observed; label no period. `observed_at` is what makes a reading interpretable at all.
+
+> ⚠️ **Unverified, carried from v3.4.** That document reports measuring the live ORS free tier on 2 September 2026 and reading **200 for directions, 50 for matrix, 100 for geocoding** — not the 2,000/day and 500/day the documentation quotes. No code in this repository produces that measurement. **Re-measure at step 5 and record the real figures here.** If it holds, the documented quota is not the operative one and the budget guard's ceiling must be set against the header, not the docs.
+
+**Drift between the two meters is a finding, not noise.** If their remaining count falls faster than our permitted calls, something is calling the provider outside the guard — and our own budget is an undercount. Drift is a *rate*, not a level: one reading says nothing, so keep the two most recent observations and compare (their fall) − (our permitted calls), floored at zero. Both counters can legitimately go backwards — theirs at a window reset, ours at a month boundary — and neither case is drift, so each starts a fresh baseline.
+
+### 8.4 Provider interface
+
+```typescript
+interface RoutingProvider {
+  readonly name: 'ors' | 'here' | 'google' | 'graphhopper';
+
+  route(req: {
+    origin: LatLng;
+    destination: LatLng;
+    via?: LatLng[];
+    truckSpec: TruckSpec;
+    departAt?: Date;
+  }): Promise<{
+    polyline: string;
+    distanceMeters: number;
+    durationSeconds: number;
+    legs: Array<{ distanceMeters: number; durationSeconds: number }>;
+    providerRaw: unknown;
+  }>;
+
+  matrix(req: {
+    origins: LatLng[];
+    destinations: LatLng[];
+    truckSpec: TruckSpec;
+  }): Promise<{ distanceMeters: number[][]; durationSeconds: number[][] }>;
+}
+```
+
+**`legs` is mandatory.** The validation loop in §15.5 needs per-leg distances from the final waypointed route, and a provider adapter that cannot supply them is unusable regardless of its other qualities.
+
+`ROUTING_PROVIDER` env var selects the adapter. v1 runs ORS in development and production alike.
+
+---
+
+## 9. Map rendering
+
+### 9.1 Requirement
+
+Custom-styled base map; station pins with custom icons; both routes overlaid in different colours and styles; hover tooltips showing price, distance from route, cumulative distance, and gallons.
+
+### 9.2 Choice: MapLibre GL JS
+
+Free, open source, vector-based. Styling is a JSON stylesheet you fully control. Handles custom markers, multiple line layers with independent paint properties, and popup/hover interactions natively.
+
+**The renderer is independent of the routing provider.** Routes are computed by the routing adapter and drawn by MapLibre. These are unrelated choices — which is why changing provider does not touch the map at all.
+
+### 9.3 Base tiles and layers
+
+**OpenFreeMap** — free, keyless, no account, OSM-derived. Alternatives if it proves unreliable: MapTiler (free tier, key required), Protomaps (self-hosted), HERE Vector Tiles (key required). Swapping is a style-URL change.
+
+| Layer | Content | Styling |
+|---|---|---|
+| `route-baseline` | Original A→B polyline | Muted, dashed |
+| `route-optimized` | Waypointed polyline | Prominent, solid |
+| `stations-selected` | Chosen fuel stops | Numbered pins, hover popup |
+| `stations-candidate` | Corridor stations not selected | Small dots, toggleable |
+| `endpoints` | Origin and destination | Distinct icons |
+
+A station resolved only to city accuracy also draws an **uncertainty circle** of radius `uncertaintyMeters`, so the dispatcher can see that a pin is a town rather than a forecourt. The API returns everything these layers need in one payload (§14).
+
+### 9.4 Google Maps link output
+
+The dispatcher's deliverable to the driver:
+
+```
+https://www.google.com/maps/dir/?api=1
+  &origin=<lat,lng>
+  &destination=<lat,lng>
+  &waypoints=<lat,lng>|<lat,lng>
+  &travelmode=driving
+```
+
+Supports up to 9 intermediate waypoints; 1–4 fuel stops fits comfortably.
+
+⚠️ **Caveat that must be surfaced in the UI:** this gives the driver a *car* route. The stop locations are correct, but the roads between them are not checked for truck restrictions. No worse than the current process, but it is a real gap between what the app computes and what the driver follows. Ship it with a disclaimer, in the payload rather than the frontend, so the frontend cannot omit it.
+
+---
+
+## 10. Deployment and infrastructure
+
+| Component | Choice | Notes |
+|---|---|---|
+| App hosting | **Vercel** | Hobby is personal/non-commercial only; Pro is $20/mo for business use |
+| Database | **Neon** (Postgres + PostGIS) | Free tier viable; branching useful for a fluid schema |
+| Auth | **Auth.js**, one seeded account | Do not build auth |
+| Cron (later) | Vercel Cron | A daily Gmail poll fits comfortably |
+| Queue | **None in v1** | Add `pg-boss` on the same Postgres if ever needed |
+| Domain | `*.vercel.app` for now | Migrate to the existing domain later |
+
+**Why Vercel:** the frontend is React and the backend is TypeScript. Next.js route handlers put the shared `PlanResponse` type in one repository with one deploy — a daily benefit for a solo developer.
+
+**Cost reality:** ORS's free tier covers this many times over and needs no card. Neon's free tier covers this. The only unavoidable cost is Vercel Pro at $20/month if this counts as business rather than personal use.
+
+**Function limits are not a constraint.** With Fluid Compute, Hobby gets 300s and Pro up to 800s. Plan computation is 3–10s of mostly I/O wait, which Active CPU billing does not charge for.
+
+**Alternatives if Vercel is rejected:** Railway (strongest — app, PostGIS, and a persistent worker in one project), Fly.io, Render, or a VPS with Docker Compose. Only relevant if a routing engine is ever self-hosted.
+
+**Local development:** Docker Compose with `postgis/postgis` (already working, port 5433), Next dev server, an ORS API key. No cloud dependency.
+
+---
+
+## 11. Data pipeline
+
+### 11.1 Ingest — one file
+
+1. **Parse the metadata row** for `company_id` and `effective_date`; skip it.
+2. **Hash the file** (SHA-256). An existing completed import with that hash → return it unchanged. Retries become free. *(§4.3 supplies a real duplicate to test this with.)*
+3. **Normalise headers** — trim, uppercase, collapse whitespace.
+4. **Stage → validate → promote.** Validate that columns are present, numerics parse, all `PROD` values are mapped, states are valid USPS codes, and `YOUR PRICE = min(TOTAL COST, RETAIL PRICE)`. Promote only on a clean pass.
+5. **Upsert stations** on `(supplier, site_ref)`; update `last_seen_at`.
+6. **Insert one `station_prices` row per station per day**, keyed on `valid_on`. Nothing is closed out and nothing is mutated — a day's prices are written once and never touched again.
+7. **Report:** rows read / accepted / rejected with reasons, new stations, unmapped product codes, stations that vanished from this sheet.
+
+At 605 rows this runs in seconds. Synchronous is fine.
+
+**Rejected rows are quarantined with a reason code, never dropped and never default-mapped.** An unmapped `PROD` value fails the row rather than guessing at it — that guard is the entire reason the product-code table exists (§22.4).
+
+### 11.2 Bulk import and historical backfill
+
+Roughly **ten years** of daily CSVs exist in Gmail, all in the same format. **Start with January 2026** — already on disk, 31 files — and extend once the pipeline is proven.
+
+**One file = one day of validity.** Because a sheet arrives every day including weekends, each file's prices are valid for exactly the single day its header names. Set `valid_on = effective_date` rather than modelling "valid until superseded" as a range. This makes ingest **order-independent** — files can be uploaded in any sequence, and the `UNIQUE (station_id, raw_product, valid_on)` constraint is the only thing that can fire, and only on a genuine duplicate. Gaps stay visible rather than being papered over by a stale price carried forward.
+
+**Two bulk paths, both wrapping the same single-file ingest:**
+
+| Path | Endpoint / command | Use |
+|---|---|---|
+| Multi-file upload | `POST /api/v1/imports/batch` — accepts a `.zip` or multiple files | Dispatcher-facing; drag a folder in |
+| CLI backfill | `npm run backfill -- ./data/bvd/2026-01/` | Ten-year replays; no timeout pressure |
+
+Both are idempotent via `file_sha256`, so re-running is free and partial failures can simply be re-run. The batch endpoint returns one `batch_id` with per-file status, so a single malformed sheet does not sink the run.
+
+**Detecting gaps:** after a backfill, report any date in the range with no `price_imports` row. **January 2026 is missing 2026-01-11** (§4.3), so this reports a real gap on the first run — which is the correct behaviour, not a bug to suppress. A missing day means either an email was deleted or BVD skipped a send.
+
+**This unlocks backtesting and forecasting far earlier than accumulating history from scratch.** Do it early. Do not delete the emails.
+
+### 11.3 Handling a new brand
+
+Today every station is a Love's. If a future sheet includes another brand, the pipeline must degrade gracefully rather than break:
+
+1. Brand extraction from `NAME` is generic — strip the trailing `#nnnn`.
+2. An unrecognised brand does **not** fail the import. The station is created with `resolution = 'unresolved'`.
+3. It appears in the import report under `new_brands` and `unresolved_stations`.
+4. It is **excluded from planning** until resolved.
+5. Resolution options, in order: OSM brand match if the chain is tagged; Census gazetteer centroid as a `city`-tier fallback; manual coordinate entry.
+
+The station is never silently planned against with a bad coordinate.
+
+### 11.4 Station resolution — a one-time script
+
+**Step 1 — The operator's own export. Verified 4 September 2026.**
+
+`data/loves/LovesSearchResults.xlsx` holds **732 stores** with coordinates. Joining on store number — the number parsed out of `NAME`, never `SITE` — against the 605 BVD stations gives:
+
+| Measure | Result |
+|---|---|
+| Matched | **604 of 605** |
+| Unmatched | **1** — store **#306** |
+| State agreement on matches | **604 of 604** — an independent check that passed completely |
+| `StoreType` of matched stores | **`Travel Stop`, all 604** |
+| `DEFLanes` / `ParkingSpaces` populated | **604 of 604**, no nulls |
+| Coordinate sanity | lat 25.95–48.57, lng −123.37 to −72.26 — inside CONUS |
+
+Practical notes for whoever writes this: the file's real header is on **row 3** (`header=2`), rows 1–2 are Love's branding and a price disclaimer, and the last row is a footer to drop. Useful columns beyond coordinates: `StoreType`, `ParkingSpaces`, `DEFLanes`, `Address`, `Zip`, `HighwayOrExit`.
+
+**That all 604 matched stores are `Travel Stop` settles §11.5's truck-accessibility question from the operator directly**, rather than by inference from OSM tagging. It also means the accessibility disclaimer can be softened — see §11.5.
+
+**Step 2 — OpenStreetMap**, for whatever step 1 misses and as a cross-check. A single Overpass query filtered to the brand returns the whole chain in one request. Do **not** batch-query Overpass per station; that is what its rate limits exist to prevent.
+
+Match on brand plus store number, which in practice comes from the `website` URL (`loves.com/locations/432`) far more often than from `ref`. Harvest `hgv`, `fuel:diesel`, `fuel:HGV_diesel`, `maxheight`, `capacity:hgv`.
+
+> ⚠️ **Unverified, carried from v3.4:** OSM holds 489 distinct Love's sites against BVD's 605; one site is often several fuel features (`Love's (Trucks)`, `Love's (Cars)`) so clustering at ~400 m is required first; only 129 stations match by store number. **OSM alone is not sufficient** — which step 1's 604/605 makes moot for v1. Re-measure only if a second supplier arrives.
+
+**Step 3 — Census Gazetteer centroids.** Places plus county subdivisions. Uncertainty radius `r = sqrt(ALAND_SQMI / π)`. Reported to resolve 595 of 605 at city accuracy. This is the fallback for a brand that publishes nothing.
+
+**Step 4 — Manual review** of the remainder. Given step 1, that is **one station** (#306). Read its coordinates from an approved source; a coordinate copied from a provider's map is still provider data (§17).
+
+| Tier | Source | `resolution` | Eligible as a stop? |
+|---|---|---|---|
+| 1 | Operator export | `exact`, u = 0 | Yes |
+| 2 | OSM match | `exact`, u ≈ 0 | Yes |
+| 3 | Census centroid | `city` | Only if u < 8 km and the leg has ≥ 2u slack |
+| — | nothing | `unresolved` | **No** |
+
+**Licensing:** see §17.1. The operator's export, OSM (ODbL, attribution required) and the Census Gazetteer (US public domain) all permit permanent storage. Provider geocoders do not.
+
+### 11.5 Truck accessibility
+
+The BVD sheet carries no diesel-lane, parking, or clearance data. But §11.4 step 1 does, for 604 of 605 stations.
+
+- **v1:** stations matched to the operator export carry `truck_accessible = 'operator_verified'`, justified by `StoreType = 'Travel Stop'` plus a non-null `DEFLanes` count. The single unmatched station carries `'unverified'`.
+- The plan still carries a `disclaimers` array, and an `ACCESSIBILITY_UNVERIFIED` disclaimer is emitted **only when a plan actually contains an unverified stop** — not unconditionally. A disclaimer that always fires is one nobody reads.
+- **v1.5:** cross-check against OSM tags where available. Absence in OSM is not evidence of absence.
+
+This is a change from v3.4, which had every stop `'unverified'` with a blanket disclaimer. The operator export makes that unnecessarily pessimistic.
+
+### 11.6 Saved locations
+
+Deliveries repeat, so origin and destination addresses recur. Cache resolved coordinates in a `saved_locations` table keyed on normalised address, with a **30-day expiry** — these come from a provider geocoder and are subject to §17's cap.
+
+**But always re-plan.** §4.3 measured a median **41¢/gal** daily swing per station; yesterday's cheapest route for the same lane is not today's. Only the geocoding is cached, never the plan.
+
+---
+
+## 12. Database schema
+
+**`migrations/*.sql` is authoritative.** This section is the target design. §12.1 lists every place the current migration diverges from it, and what to do about each.
+
+```sql
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+-- ─── Reference ───────────────────────────────────────────────────────────
+
+CREATE TABLE place_centroids (
+  state_usps       char(2) NOT NULL,
+  name_normalized  text    NOT NULL,
+  name_raw         text    NOT NULL,
+  geoid            text,
+  geom             geography(Point,4326) NOT NULL,
+  land_area_sqmi   numeric(10,4),
+  uncertainty_m    numeric(10,1) NOT NULL,
+  source           text NOT NULL,
+  PRIMARY KEY (state_usps, name_normalized)
+);
+
+CREATE TABLE product_codes (
+  supplier      text NOT NULL,
+  raw_code      text NOT NULL,
+  product_type  text NOT NULL
+    CHECK (product_type IN ('highway_diesel','off_road_diesel','gasoline','def','other')),
+  mapped_by     text NOT NULL,
+  mapped_at     timestamptz NOT NULL DEFAULT now(),
+  notes         text,
+  PRIMARY KEY (supplier, raw_code)
+);
+-- Seed: ('BVD','ULSD','highway_diesel','seed',now(),'Confirmed from 2026-08-22 sheet')
+
+-- ─── Users and locations ─────────────────────────────────────────────────
+
+CREATE TABLE users (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email      text UNIQUE NOT NULL,
+  role       text NOT NULL DEFAULT 'dispatcher'
+               CHECK (role IN ('dispatcher','driver','admin')),
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE saved_locations (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  label          text,
+  address_raw    text NOT NULL,
+  address_norm   text NOT NULL UNIQUE,
+  geom           geography(Point,4326) NOT NULL,
+  geocode_source text NOT NULL,
+  geocoded_at    timestamptz NOT NULL DEFAULT now(),
+  expires_at     timestamptz NOT NULL,     -- provider geocodes: 30-day cap
+  use_count      integer NOT NULL DEFAULT 0
+);
+
+-- ─── Truck profiles ──────────────────────────────────────────────────────
+
+CREATE TABLE truck_profiles (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug                 text NOT NULL,
+  display_name         text NOT NULL,
+  truck_number         integer UNIQUE,          -- fleet unit number, if assigned
+  owner_user_id        uuid REFERENCES users(id),
+  is_system            boolean NOT NULL DEFAULT false,
+  is_active            boolean NOT NULL DEFAULT true,
+
+  -- fuel model (§5)
+  tank_gallons         numeric(6,1) NOT NULL CHECK (tank_gallons > 0),
+  avg_mpg              numeric(4,2) NOT NULL CHECK (avg_mpg > 0),
+  reserve_fraction     numeric(4,3) NOT NULL DEFAULT 0.150
+                         CHECK (reserve_fraction >= 0 AND reserve_fraction < 0.5),
+  max_leg_miles        numeric(6,1) NOT NULL DEFAULT 500,
+  min_leg_miles        numeric(6,1) NOT NULL DEFAULT 300,
+  max_gallons_per_fill numeric(6,1),
+
+  -- physical spec → routing provider
+  gross_weight_kg      integer,
+  height_cm            integer,
+  width_cm             integer,
+  length_cm            integer,
+  axle_count           smallint,
+  trailer_count        smallint,
+  hazmat_class         text,
+
+  -- cost model
+  cost_per_mile_usd    numeric(6,3) NOT NULL DEFAULT 0.000,
+  fixed_stop_minutes   integer      NOT NULL DEFAULT 20,
+
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT now(),
+
+  CHECK (min_leg_miles <= max_leg_miles)
+);
+
+CREATE UNIQUE INDEX truck_profiles_owner_slug ON truck_profiles
+  (COALESCE(owner_user_id,'00000000-0000-0000-0000-000000000000'::uuid), slug);
+
+-- ─── Stations ────────────────────────────────────────────────────────────
+
+CREATE TABLE stations (
+  id                  uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  supplier            text NOT NULL,
+  site_ref            text NOT NULL,        -- BVD's SITE
+  name_raw            text NOT NULL,        -- "LOVES #368"
+  brand_normalized    text,                 -- "LOVES"
+  store_number        integer,              -- 368 — the operator/OSM join key
+  city_raw            text NOT NULL,
+  city_normalized     text NOT NULL,
+  state_usps          char(2) NOT NULL,
+  country             char(2) NOT NULL DEFAULT 'US',
+
+  geom                geography(Point,4326),
+  resolution          text NOT NULL DEFAULT 'unresolved'
+                        CHECK (resolution IN ('exact','city','unresolved')),
+  uncertainty_m       numeric(10,1),
+  resolution_source   text,
+  resolved_at         timestamptz,
+
+  truck_accessible    text NOT NULL DEFAULT 'unverified'
+                        CHECK (truck_accessible IN ('operator_verified','osm_verified',
+                                                    'unverified','excluded')),
+  osm_id              text,
+  osm_tags            jsonb,
+  operator_attrs      jsonb,                -- StoreType, ParkingSpaces, DEFLanes.
+                                            -- NEVER prices — see §17.1.
+  max_gallons_per_txn numeric(6,1),
+
+  first_seen_at       timestamptz NOT NULL DEFAULT now(),
+  last_seen_at        timestamptz NOT NULL DEFAULT now(),
+
+  UNIQUE (supplier, site_ref)
+);
+
+CREATE INDEX stations_geom_gix   ON stations USING GIST (geom);
+CREATE INDEX stations_resolution ON stations (resolution) WHERE resolution <> 'unresolved';
+CREATE INDEX stations_store_num  ON stations (brand_normalized, store_number);
+
+CREATE TABLE station_geocode_candidates (
+  id            bigserial PRIMARY KEY,
+  station_id    uuid NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
+  rank          smallint NOT NULL,
+  geom          geography(Point,4326) NOT NULL,
+  source        text NOT NULL,
+  score         numeric(5,4),
+  uncertainty_m numeric(10,1),
+  raw           jsonb,
+  created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+-- ─── Imports and prices ──────────────────────────────────────────────────
+
+CREATE TABLE import_batches (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  label        text,
+  file_count   integer NOT NULL DEFAULT 0,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  completed_at timestamptz
+);
+
+CREATE TABLE price_imports (
+  id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  batch_id        uuid REFERENCES import_batches(id),
+  supplier        text NOT NULL,
+  company_id      text,
+  country         char(2) NOT NULL DEFAULT 'US',
+  source_filename text NOT NULL,
+  file_sha256     char(64) NOT NULL UNIQUE,   -- the idempotency key
+  effective_date  date NOT NULL,              -- from the header. NOT unique — see §12.1
+  received_at     timestamptz,
+  status          text NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending','parsing','validating','completed','failed')),
+  rows_read       integer,
+  rows_accepted   integer,
+  rows_rejected   integer,
+  report          jsonb,
+  started_at      timestamptz NOT NULL DEFAULT now(),
+  completed_at    timestamptz
+);
+
+CREATE INDEX price_imports_effective ON price_imports (supplier, effective_date);
+
+CREATE TABLE import_rejections (
+  id          bigserial PRIMARY KEY,
+  import_id   uuid NOT NULL REFERENCES price_imports(id) ON DELETE CASCADE,
+  line_number integer NOT NULL,
+  site_ref    text,
+  code        text NOT NULL,
+  message     text NOT NULL
+);
+
+CREATE TABLE station_prices (
+  id             bigserial PRIMARY KEY,
+  station_id     uuid   NOT NULL REFERENCES stations(id),
+  import_id      uuid   NOT NULL REFERENCES price_imports(id) ON DELETE CASCADE,
+  raw_product    text   NOT NULL,
+  product_type   text   NOT NULL,   -- denormalised at import; see §15.4
+
+  cost           numeric(8,4),
+  federal_tax    numeric(8,4),
+  state_tax      numeric(8,4),
+  sales_tax      numeric(8,4),
+  freight        numeric(8,4),
+  other          numeric(8,4),
+  total_cost     numeric(8,4),
+  retail_price   numeric(8,4),
+  your_price     numeric(8,4),   -- = min(total_cost, retail_price); READ, never compute
+  savings        numeric(8,4),
+
+  price_pump     numeric(8,4) GENERATED ALWAYS AS (your_price) STORED,
+  price_ifta_net numeric(8,4) GENERATED ALWAYS AS
+                   (COALESCE(cost,0) + COALESCE(freight,0)
+                    + COALESCE(other,0) + COALESCE(federal_tax,0)) STORED,
+
+  valid_on       date NOT NULL,   -- exactly one day. Not a range.
+
+  UNIQUE (station_id, raw_product, valid_on)
+);
+
+CREATE INDEX station_prices_lookup ON station_prices (valid_on, product_type, station_id);
+
+-- ─── Routes and plans ────────────────────────────────────────────────────
+
+CREATE TABLE routes (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider         text NOT NULL,
+  request_hash     char(64) NOT NULL,
+  origin_geom      geography(Point,4326) NOT NULL,
+  destination_geom geography(Point,4326) NOT NULL,
+  truck_profile_id uuid NOT NULL REFERENCES truck_profiles(id),
+  via_hash         char(64),
+  line             geography(LineString,4326),   -- NULLABLE: expires, see §17
+  polyline         text,                         -- NULLABLE: expires
+  legs             jsonb,                        -- NULLABLE: expires
+  distance_m       numeric(12,1) NOT NULL,       -- scalar: permanent
+  duration_s       integer NOT NULL,             -- scalar: permanent
+  computed_at      timestamptz NOT NULL DEFAULT now(),
+  expires_at       timestamptz NOT NULL,
+  UNIQUE (provider, request_hash)
+);
+
+CREATE INDEX routes_line_gix ON routes USING GIST (line);
+CREATE INDEX routes_expiry   ON routes (expires_at);
+
+-- expires_at is set by a trigger, never by application code, so the 30-day
+-- retention cap cannot be forgotten. See §17.
+CREATE OR REPLACE FUNCTION set_route_expiry() RETURNS trigger AS $$
+BEGIN
+  NEW.expires_at := COALESCE(NEW.computed_at, now()) + interval '30 days';
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER routes_set_expiry
+  BEFORE INSERT OR UPDATE OF computed_at ON routes
+  FOR EACH ROW EXECUTE FUNCTION set_route_expiry();
+
+CREATE TABLE plans (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_by           uuid REFERENCES users(id),
+  base_route_id        uuid NOT NULL REFERENCES routes(id),
+  optimized_route_id   uuid REFERENCES routes(id),
+  truck_profile_id     uuid NOT NULL REFERENCES truck_profiles(id),
+
+  optimizer_strategy   text NOT NULL DEFAULT 'dp_v1',
+  price_basis          text NOT NULL DEFAULT 'pump'
+                         CHECK (price_basis IN ('pump','ifta_net','total_cost')),
+  start_fuel_gallons   numeric(6,1) NOT NULL,
+  min_arrival_gallons  numeric(6,1) NOT NULL,
+  max_leg_miles        numeric(6,1) NOT NULL,
+  min_leg_miles        numeric(6,1) NOT NULL,
+  min_leg_relaxed      boolean      NOT NULL DEFAULT false,   -- §5.1 two-pass fallback
+  max_detour_miles     numeric(5,1) NOT NULL,
+  driver_cost_per_hour numeric(7,2) NOT NULL DEFAULT 0,
+  fixed_stop_minutes   integer      NOT NULL DEFAULT 20,
+  max_stops            smallint,
+
+  status               text NOT NULL DEFAULT 'pending'
+                         CHECK (status IN ('pending','computing','completed','infeasible','failed')),
+  infeasible_reason    text,
+
+  total_fuel_cost_usd  numeric(10,2),
+  total_gallons        numeric(8,2),
+  total_distance_m     numeric(12,1),
+  total_duration_s     integer,
+  baseline_cost_usd    numeric(10,2),
+  price_as_of          date,
+  google_maps_url      text,
+  disclaimers          jsonb NOT NULL DEFAULT '[]'::jsonb,
+
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  completed_at         timestamptz
+);
+
+CREATE TABLE plan_stops (
+  id                   bigserial PRIMARY KEY,
+  plan_id              uuid NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+  seq                  smallint NOT NULL,
+  stop_type            text NOT NULL DEFAULT 'fuel'
+                         CHECK (stop_type IN ('fuel','rest','delivery')),
+  station_id           uuid   REFERENCES stations(id),
+  station_price_id     bigint REFERENCES station_prices(id),
+
+  offset_along_route_m numeric(12,1) NOT NULL,
+  leg_distance_m       numeric(12,1) NOT NULL,   -- from the previous fill
+  detour_distance_m    numeric(10,1) NOT NULL DEFAULT 0,
+  detour_duration_s    integer      NOT NULL DEFAULT 0,
+
+  arrival_gallons      numeric(6,2) NOT NULL,
+  purchase_gallons     numeric(6,2) NOT NULL,
+  departure_gallons    numeric(6,2) NOT NULL,
+  unit_price_usd       numeric(8,4) NOT NULL,    -- literal, not a join. See §17.
+  stop_cost_usd        numeric(9,2) NOT NULL,
+
+  cum_distance_m       numeric(12,1) NOT NULL,
+  cum_duration_s       integer      NOT NULL,
+
+  UNIQUE (plan_id, seq)
+);
+
+-- ─── Provider metering (§8.3) ────────────────────────────────────────────
+
+CREATE TABLE provider_usage (        -- ours: a monthly spend ceiling
+  provider   text NOT NULL,
+  period     date NOT NULL,
+  endpoint   text NOT NULL,
+  call_count integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (provider, period, endpoint)
+);
+
+CREATE TABLE provider_quota (        -- theirs: an observed rate limit, no stated window
+  provider     text NOT NULL,
+  endpoint     text NOT NULL,
+  limit_value  integer,
+  remaining    integer,
+  observed_at  timestamptz NOT NULL,
+  prev_remaining integer,
+  prev_observed_at timestamptz,
+  PRIMARY KEY (provider, endpoint)
+);
+```
+
+### 12.1 Where the current migration diverges — must fix
+
+`migrations/0001_init.sql` was written before this design settled. Every item below is a real difference, ordered by severity.
+
+| # | Issue | Impact | Fix |
+|---|---|---|---|
+| 1 | **Syntax error** — trailing comma after `max_leg_miles … DEFAULT 500,` before the closing `);` in `trucks` | **The migration does not run at all.** Docker Compose's init step fails silently on an already-initialised volume. | Delete the comma. Then `npm run db:reset` to re-run against a clean volume. |
+| 2 | `price_imports.effective_date` is **`UNIQUE`** | Blocks a corrected re-send for the same day, and blocks a second supplier's sheet for that day. The SHA-256 already provides idempotency; this constraint adds nothing and forbids something legitimate. | Drop `UNIQUE`; keep a plain index. |
+| 3 | No `plans` or `plan_stops` | The business record does not exist. Everything in §17's retention model depends on these. | Add. |
+| 4 | No `users`, `saved_locations`, `product_codes`, `place_centroids`, `import_batches`, `import_rejections`, `provider_usage`, `provider_quota` | Auth, geocode caching, the unmapped-product tripwire, the gazetteer fallback, batch reporting and the budget guard all have nowhere to live. | Add as needed per build step, not all at once. |
+| 5 | `trucks` lacks `min_leg_miles`, `cost_per_mile_usd`, `fixed_stop_minutes` | §5.5's parameters have no home; the 300-mile floor would become a hardcoded constant. | Add. Rename the table `truck_profiles`. |
+| 6 | `trucks.reserve_fraction` defaults to **0.100**, spec says **0.150** | A 5-point difference in the safety margin that absorbs MPG error. | Decide (§21 Q2), then align both. |
+| 7 | `stations.site_ref` is `UNIQUE` alone, not `(supplier, site_ref)` | Fine for one supplier; breaks the moment a second one shares a site ID. | Change to a composite unique with a `supplier` column. |
+| 8 | `stations` has no `resolution`, `uncertainty_m`, `truck_accessible`, `operator_attrs` | §11.4's tier model and §11.5's accessibility cannot be recorded. | Add. |
+| 9 | `station_prices.effective_on` vs spec's `valid_on`; no generated price columns; unique is `(station_id, product_type, effective_on)` not `(station_id, raw_product, valid_on)` | Naming drift, plus keying on the mapped type rather than the raw code loses the ability to carry two raw codes that map to one type. | Rename and re-key. |
+| 10 | `routes.line` and `polyline` are `NOT NULL`; no `provider`, no expiry trigger | §17's expiry job cannot null the geometry, so the retention model is unimplementable as written. | Make geometry nullable, add `provider`, add the trigger. |
+| 11 | All keys are `bigserial`, spec uses `uuid` | Cosmetic, but mixed styles are worse than either. | Pick one (§21 Q3). |
+
+**Recommended approach:** rather than a chain of `ALTER TABLE` migrations against a schema that has never successfully applied and holds no data, **rewrite `0001_init.sql`.** There is nothing to preserve. Once real data is loaded, switch to additive migrations permanently.
+
+### 12.2 Schema notes
+
+- **`station_prices` is keyed on a plain `valid_on` date, not a `tstzrange`.** A sheet arrives every day, so validity is always exactly one day. A date column with a unique constraint expresses the same guarantee more simply, keeps bulk backfill order-independent, and leaves a skipped day visible as a gap rather than papering over it with a stale price carried forward. §4.3's missing 2026-01-11 is exactly the case this preserves.
+- `truck_profiles` needs no migration for user-defined profiles — `owner_user_id` plus the partial unique index handles it.
+- `plans.optimizer_strategy` records which algorithm produced a plan, so results stay interpretable across upgrades.
+- `plans.min_leg_relaxed` records that §5.1's fallback fired, so a plan with a short leg is always distinguishable from one that met the floor.
+- **Keep a schema-drift test.** Mirror the migrations in the query builder's schema definition and compare that mirror against `information_schema` on every test run. Code and database then cannot drift from each other. Neither checks *this document* — when they disagree with §12, the migration wins and §12 gets edited.
+
+---
+
+## 13. Service boundaries
+
+```
+API Layer (Next.js route handlers)
+  └─ validation, auth, serialisation, unit conversion. No business logic.
+      ├── Ingest Service ......... parse, validate, promote
+      ├── Resolution Service ..... operator export → OSM → gazetteer → manual queue
+      ├── Catalog Service ........ profiles, stations, price history, saved locations
+      └── Planning Service ....... orchestration
+              ├── Routing Adapter (ORS in v1 | HERE | Google) + budget guard
+              └── Optimizer Strategy  ← PURE, no I/O
+```
+
+**Auth sits in front of the API, not inside it.** Keep `src/api/` framework-free so the whole API can mount in a single Next route file and be exercised by tests without a server. A thin proxy layer refuses anonymous requests: 307 to `/signin` for a page, 401 `application/problem+json` for an API path — because a redirect answers `fetch` with a 200 carrying a sign-in page, which is a confusing failure. Nothing is exempt, including `GET /health`.
+
+The API is **told** whether it is protected rather than asserting it: `createApp({ authRequired: true })` from the mount. A local `npm run serve` has no session check and binds to `127.0.0.1`.
+
+### 13.1 The optimiser as a swappable strategy
+
+Modularity was an explicit requirement. The optimiser is a **pure function behind a registry**, so a more complex algorithm can be dropped in without touching orchestration, persistence, or the API.
+
+```typescript
+export interface OptimizerInput {
+  totalDistanceMeters: number;
+  candidates: Candidate[];         // sorted by offsetAlongRoute
+  fuel: {
+    tankGallons: number;
+    avgMpg: number;
+    reserveFraction: number;
+    maxLegMiles: number;
+    minLegMiles: number;
+    startGallons: number;
+    minArrivalGallons: number;
+    requireArrivalWithinMaxLeg: boolean;
+  };
+  cost: {
+    costPerMile: number;
+    driverCostPerHour: number;
+    fixedStopMinutes: number;
+  };
+  maxStops?: number;
+}
+
+export type OptimizerResult =
+  | { kind: 'plan'; stops: PlannedStop[]; totalCostUsd: number; totalGallons: number }
+  | { kind: 'infeasible'; code: InfeasibleCode; detail: Record<string, unknown> };
+
+export interface OptimizerStrategy {
+  readonly id: string;                 // persisted to plans.optimizer_strategy
+  readonly description: string;
+  solve(input: OptimizerInput): OptimizerResult;
+}
+
+export const OPTIMIZERS: Record<string, OptimizerStrategy> = {
+  dp_v1:     dynamicProgrammingOptimizer,   // default — exact
+  greedy_v1: greedyOptimizer,               // reference baseline
+};
+```
+
+**Rules that keep this modular:**
+
+- **No I/O in a strategy.** No database, no HTTP, no clock. Every strategy is testable in-process against fixtures.
+- Strategies are interchangeable on identical input. Running two and diffing is a supported workflow.
+- `plans.optimizer_strategy` records which one ran, so historical plans stay interpretable after an upgrade.
+- Adding a strategy is a new file plus a registry entry. Nothing else changes.
+
+This is the highest-leverage structural decision in the backend. Every interesting bug will live inside a strategy, and you want a hundred table-driven cases running in milliseconds without a container.
+
+---
+
+## 14. API design
+
+Versioned under `/api/v1`. Errors follow RFC 9457. All responses accept `?units=imperial|metric`, default imperial.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/truck-profiles` | List profiles |
+| `POST` | `/plans` | Create a plan |
+| `GET` | `/plans/{id}` | Fetch a plan — map + table + link in one payload |
+| `GET` | `/plans` | Recent plans |
+| `POST` | `/imports` | Upload a BVD CSV |
+| `POST` | `/imports/batch` | Bulk upload — zip or multi-file |
+| `GET` | `/imports/batch/{id}` | Per-file status for a batch |
+| `GET` | `/imports/{id}` | Status + validation report |
+| `GET` | `/imports/{id}/rejections` | Rejected rows with reasons |
+| `GET` | `/stations` | Station layer (`?bbox=`, `?resolution=`) |
+| `GET` | `/stations/{id}/prices` | Price history |
+| `GET` | `/health` | DB, provider reachability, both call meters, latest sheet date |
+
+### `POST /plans`
+
+```jsonc
+{
+  "origin":      { "address": "1200 W 35th St, Chicago, IL 60609" },
+  "destination": { "address": "4200 S Lamar Blvd, Dallas, TX 75215" },
+  "truckProfileId": "…",
+
+  "startFuelGallons":   null,     // default = tank capacity (100%)
+  "minArrivalGallons":  null,     // default = reserve level
+  "maxLegMiles":        500,      // default from profile
+  "minLegMiles":        300,      // default from profile; auto-relaxed if infeasible
+  "maxDetourMiles":     5,
+  "maxStops":           null,
+  "priceBasis":         "pump",
+  "driverCostPerHour":  0,
+  "fixedStopMinutes":   20,
+  "optimizerStrategy":  "dp_v1",  // optional override
+  "departAt":           null
+}
+```
+
+Both endpoints accept `{ "address": "…" }` or `{ "lat": …, "lng": … }`.
+
+### `GET /plans/{id}` — completed
+
+```jsonc
+{
+  "planId": "…",
+  "status": "completed",
+  "units": "imperial",
+  "priceAsOf": "2026-08-22",
+  "optimizerStrategy": "dp_v1",
+
+  "truckProfile": {
+    "slug": "volvo-vnl-860",
+    "displayName": "Volvo VNL 860 — dual tank, long haul",
+    "maxLegMiles": 500
+  },
+
+  "baseline": {
+    "polyline": "BG0xy…",
+    "distanceMiles": 967.4,
+    "durationSeconds": 53280,
+    "estimatedFuelCostUsd": 863.20,
+    "bounds": { "north": 0, "south": 0, "east": 0, "west": 0 }
+  },
+
+  "optimized": {
+    "polyline": "BG3ab…",
+    "distanceMiles": 981.2,
+    "durationSeconds": 55020,
+    "totalFuelCostUsd": 792.14,
+    "totalGallons": 163.5,
+    "savingsVsBaselineUsd": 71.06,
+    "addedDistanceMiles": 13.8,
+    "addedDurationSeconds": 1740,
+    "bounds": { }
+  },
+
+  "stops": [
+    {
+      "seq": 1,
+      "stopType": "fuel",
+      "station": {
+        "id": "…",
+        "name": "LOVES #412",
+        "storeNumber": 412,
+        "city": "Effingham",
+        "state": "IL",
+        "location": { "lat": 39.1123, "lng": -88.5434 },
+        "resolution": "exact",
+        "uncertaintyMeters": 0,
+        "truckAccessible": "operator_verified"
+      },
+      "legDistanceMiles": 214.3,
+      "detourMiles": 0.4,
+      "detourSeconds": 90,
+      "unitPriceUsd": 5.193,
+      "arrivalGallons": 64.2,
+      "purchaseGallons": 85.8,
+      "departureGallons": 150.0,
+      "stopCostUsd": 445.56,
+      "cumulativeDistanceMiles": 214.7,
+      "cumulativeDurationSeconds": 12180,
+      "arrivalFuelPercent": 42.8
+    }
+  ],
+
+  "candidateStations": [ /* corridor stations not selected — the map's dot layer */ ],
+
+  "googleMapsUrl": "https://www.google.com/maps/dir/?api=1&origin=…&destination=…&waypoints=…",
+
+  "disclaimers": [
+    { "code": "GOOGLE_LINK_NOT_TRUCK_LEGAL",
+      "message": "The Google Maps link routes between the correct stops but does not check truck restrictions." },
+    { "code": "PRICE_STALENESS",
+      "message": "Prices reflect the BVD sheet effective 2026-08-22." }
+  ],
+
+  "attribution": {
+    "routing": "© openrouteservice.org (HeiGIT)",
+    "placeData": "© OpenStreetMap contributors (ODbL)"
+  }
+}
+```
+
+**`stops[]` serves the map markers and the table.** One array, no drift between the two views.
+
+**Disclaimers are conditional.** `GOOGLE_LINK_NOT_TRUCK_LEGAL` always fires. `ACCESSIBILITY_UNVERIFIED` fires only when a stop is not operator-verified (§11.5). `MIN_LEG_RELAXED` fires only when §5.1's second pass ran, and names the short legs.
+
+### `GET /plans/{id}` — infeasible
+
+```jsonc
+{
+  "planId": "…",
+  "status": "infeasible",
+  "reason": {
+    "code": "LEG_GAP",
+    "message": "No BVD station between mile 412 and mile 1,088; the 500-mile cap cannot be met.",
+    "gapStartMile": 412,
+    "gapEndMile": 1088,
+    "gapMiles": 676,
+    "maxLegMiles": 500,
+    "suggestions": [
+      { "action": "increaseDetour",      "maxDetourMiles": 25 },
+      { "action": "increaseMaxLeg",      "maxLegMiles": 700 },
+      { "action": "allowOffNetworkStop", "note": "Requires a non-BVD fuel stop" }
+    ]
+  },
+  "candidateStations": [ /* still returned, so the dispatcher can decide manually */ ]
+}
+```
+
+Given §4.4's thin coverage in CT/NJ/WV/MD/SD/ID/MN/MT, this **will** fire on real lanes. Returning candidates alongside the failure lets the dispatcher fall back to judgement rather than hitting a dead end. An infeasible plan is a legitimate answer, not an error — it is persisted with `status = 'infeasible'`, not discarded.
+
+### Geometry expiry
+
+A plan older than 30 days still renders its table but returns `"geometryExpired": true` instead of a broken polyline. Nothing is recomputed and no provider call is made just to display one. See §17.
+
+---
+
+## 15. The stop-selection algorithm
+
+### 15.1 Formulation
+
+Minimise total cost subject to:
+
+- Distance between consecutive fuel purchases ≤ `max_leg_miles` (500) — **hard**
+- Distance between consecutive purchases ≥ `min_leg_miles` (300) — **hard**, but see §5.1's relaxation pass
+- The minimum does **not** apply to the final leg (last fill → destination)
+- Tank level never below `reserve_fraction × tank_gallons` — **hard**
+- Tank level never above `tank_gallons` — **hard**
+- Arrival fuel ≥ `min_arrival_gallons` — **hard**
+- Origin counts as a fill (truck starts at 100%)
+- Destination within `max_leg_miles` of the last fill, if `requireArrivalWithinMaxLeg`
+
+Objective:
+
+```
+total = Σ (purchase_gallons_i × price_i)
+      + Σ (detour_miles_i × cost_per_mile)
+      + Σ (detour_hours_i × driver_cost_per_hour)
+      + Σ (fixed_stop_minutes / 60 × driver_cost_per_hour)   for each stop where purchase > 0
+```
+
+### 15.2 Why an exact DP, not a greedy
+
+Lin, Gertsch & Russell (2007) prove the greedy refuelling policy optimal for the fixed-route problem, but the proof assumes free pass-by and no per-stop cost. Detours and the stop penalty violate both.
+
+More decisively: with a 500-mile cap, any realistic route has **1–4 stops** and **tens of corridor candidates**. An exact DP runs in single-digit milliseconds. There is no reason to accept a heuristic here. The greedy is retained as `greedy_v1` purely as a comparison baseline — running both and diffing is how you find out whether a future strategy is actually better.
+
+### 15.3 The DP
+
+**State:** `cost[i][f]` = minimum cost to arrive at candidate *i* holding *f* gallons (before purchasing), where *f* is a bucket index.
+
+**Buckets:** 2-gallon granularity. A 150-gallon tank → 75 buckets, finer than the ±10% real-world MPG error. **Round conservatively — down on arrival fuel** — so discretisation never manufactures range that does not exist.
+
+**Two-phase relaxation per station**, which is what keeps it cheap:
+
+*Phase A — purchase (in place).* At station *i*, scan buckets upward. Buying moves you from bucket *f* to *f+1* at a cost of `bucketGallons × price_i`. One linear pass gives the optimal cost of reaching every departure level. The fixed stop penalty is charged once, on the first gallon bought.
+
+```
+for f from 0 to B-1:
+    if depart[i][f] + bucketGallons * price_i < depart[i][f+1]:
+        depart[i][f+1] = depart[i][f] + bucketGallons * price_i
+```
+
+*Phase B — drive.* For each departure bucket at *i* and each candidate *j* with `min_leg_miles ≤ s_j − s_i ≤ max_leg_miles`, compute burn and relax `cost[j][f']`. The lower bound is the only change the hard floor introduces — and the transition into the virtual destination node ignores it.
+
+**Complexity:** O(n·B) for Phase A across all stations, O(n²·B) for Phase B. At n = 80, B = 75 that is roughly 480,000 relaxations — milliseconds.
+
+**Origin** is a virtual node at mile 0, fuel = tank capacity, price = ∞ (no purchase possible).
+**Destination** is a virtual node at mile D; a transition into it is valid only if the leg is within `max_leg_miles` and arrival fuel ≥ `min_arrival_gallons`.
+
+**`maxStops`** adds a third state dimension `(i, f, stops_used)`, multiplying the state space by `maxStops` — still trivial. Implement only when needed.
+
+**Reconstruct** by storing the predecessor `(station, bucket, purchase)` at each relaxation.
+
+**Two-pass driver.** The strategy is invoked once with `min_leg_miles = 300`. If it returns infeasible, the planner re-invokes with `min_leg_miles = 0` and records `MIN_LEG_RELAXED`, listing which legs fall below the floor. **The strategy itself stays pure** — the retry lives in the Planning Service, not inside `solve()`.
+
+**Feasibility structure worth knowing.** The window in which each stop can land narrows as route length approaches an awkward multiple of the leg bounds. A 967-mile route admits either one stop confined to miles 467–500 (a 33-mile window) or two stops with far more freedom. The DP evaluates every stop count automatically and picks the cheapest feasible shape, so this needs no special handling — but it explains why some routes surface `LEG_GAP` while a slightly longer one plans fine.
+
+### 15.4 Corridor query and detours
+
+```sql
+WITH route AS (SELECT line, distance_m FROM routes WHERE id = $1),
+corridor AS (
+  SELECT s.id, s.name_raw, s.store_number, s.city_raw, s.state_usps,
+         s.resolution, COALESCE(s.uncertainty_m,0) AS uncertainty_m,
+         s.truck_accessible, s.geom,
+         ST_LineLocatePoint(r.line::geometry, s.geom::geometry) AS frac,
+         ST_Distance(s.geom, r.line) AS perp_offset_m,
+         r.distance_m
+  FROM stations s CROSS JOIN route r
+  WHERE s.resolution <> 'unresolved'
+    AND ST_DWithin(s.geom, r.line, $2)
+)
+SELECT c.*,
+       ST_Y(c.geom::geometry) AS lat,
+       ST_X(c.geom::geometry) AS lng,
+       c.frac * c.distance_m  AS offset_along_route_m,
+       sp.id AS price_id,
+       CASE $3
+         WHEN 'pump'       THEN sp.price_pump
+         WHEN 'ifta_net'   THEN sp.price_ifta_net
+         WHEN 'total_cost' THEN sp.total_cost
+       END AS unit_price
+FROM corridor c
+LEFT JOIN LATERAL (
+  SELECT sp.* FROM station_prices sp
+  WHERE sp.station_id = c.id
+    AND sp.product_type = 'highway_diesel'
+    AND sp.valid_on = $4
+  LIMIT 1
+) sp ON true
+ORDER BY offset_along_route_m;
+```
+
+`$4` is an explicit date rather than an implied "current" flag. Prices are stored one row per station per day, so "today's price" is a date the caller chooses. It is recorded on the plan as `price_as_of`, which is what makes a plan reproducible after the fact.
+
+**Three requirements that are easy to get wrong.** All three come from v3.4's milestone 5; the reasoning is sound and is restated here as a specification, not as a report of work done.
+
+**a) No `product_codes` join in the hot path.** `station_prices.product_type` is denormalised onto the row at import time and indexed as `(valid_on, product_type, station_id)`. §11.1's hard rule keeps an unmapped code out of the table entirely, so joining to re-derive the type is redundant work on every corridor query.
+
+**b) `LEFT JOIN LATERAL` for the price, not an inner join.** An inner join makes a station with no price on `valid_on` vanish — indistinguishable from one that was never near the route. Those stations must be **counted and named** in the result's `exclusions`, because "no price that day" and "not on this route" are different facts and only one of them is a data problem.
+
+**c) Top-K must be stratified by position, not sorted by price.** Prices cluster regionally (§4.4: TX has 84 stations, CT has 1). The 40 cheapest on a Texas-to-Illinois run can all sit at one end, leaving a 500-mile stretch with no candidate. The optimiser then reports a range gap across ground that had usable stations on it, and the output looks like a legitimate infeasibility. **Cut the route into 50-mile buckets and draw round-robin, cheapest first within each bucket. Coverage first, price within it.**
+
+#### 15.4.1 The detour model
+
+**"Route from the nearest point on the line to the station and double it" does not work.** A truck cannot turn around on a controlled-access highway, so a router asked for that trip correctly returns a long one — to the next interchange and back. The provider is right; the question is wrong. The truck is already driving past and will use the interchange that serves the station.
+
+Measure the detour against the route the truck was taking anyway:
+
+```
+detour = d(before → station) + d(station → after) − d(before → after)
+```
+
+`before` and `after` are points on the route ten miles either side, via `ST_LineInterpolatePoint`. `d(before → after)` is the route's own arc length — already known, never requested from the provider.
+
+> ⚠️ **Unverified, carried from v3.4:** that document reports LOVES #759 in Hazen AR, 0.25 miles from the route, measuring **38 miles** under the naive model and **1.98 miles** under the bracket model, with mean absolute error falling from 9.8 mi to 2.4 mi and worst underestimate from 37.6 mi to 3.0 mi. No code here produces those figures. **The model is specified because its reasoning is sound; re-measure when it is built.**
+
+**Two stages:**
+
+1. **Estimate, for filtering:** `d_i ≈ 2 × perp_offset_m × 1.35` (ramps, frontage roads, no left turns for a 53-foot trailer). If `perp_offset_m < 200 m`, treat `d_i = 0`.
+2. **Real distances for survivors:** matrix calls for the top-K candidates (K ≈ 40).
+
+**Cost: two matrix calls, not one.** The two legs point in opposite directions, and a single call covering both needs a 2N × 2N grid — 5,184 pairs at N=36, past what ORS accepts. Two separate N × N calls stay well inside the limit.
+
+> ⚠️ **Unverified, carried from v3.4:** it reports measuring the ORS ceiling at **50 × 50 (2,500 pairs) succeeding for `driving-hgv` on the free tier**, so K=40 needs no chunking. Re-measure before relying on it.
+
+**Keep `estimatedDetourMiles` beside the measurement rather than overwriting it.** The comparison between the two is the only evidence that would ever show the 1.35 multiplier badly chosen — and, per v3.4, it is what caught the naive model's error in the first place.
+
+### 15.5 The validation loop — mandatory
+
+Everything above uses distances along the **baseline** polyline. The waypointed route will differ, because inserting a stop can change which highway the router picks.
+
+```
+1. DP on baseline distances                      → stop set S
+2. route(origin, destination, via=S)             → real per-leg distances
+3. Re-check the 500-mile cap and reserve floor against REAL distances
+4. IF violated:
+     recompute with real distances, re-run the DP
+     IF the stop set changed → go to 2
+     cap at 3 iterations → Infeasible(NO_STABLE_PLAN)
+5. Recompute costs and cumulative values from the REAL route
+6. Build the Google Maps URL, persist
+```
+
+Converges on the first or second pass almost always.
+
+**Without this, the 500-mile guarantee is a claim you have not verified.** This is why §19 places it before the API surface: everything upstream measures distance along the base route, so until waypoints are inserted and the legs re-measured, the guarantee is an assertion. An assertion like that should not be given an endpoint to be served from.
+
+### 15.6 Test cases for the optimiser
+
+At minimum, and all runnable with no database and no network:
+
+- single candidate; zero candidates; candidate at mile 0
+- monotonically rising prices; monotonically falling prices
+- gap exactly 500 miles; gap 501 miles (must be rejected)
+- gap exactly 300 miles; gap 299 miles (must be rejected)
+- a station 200 miles out that is cheapest but violates the floor
+- **final leg under 300 miles — must be ACCEPTED** (no floor on arrival, §5.1)
+- destination exactly 500 miles from the last stop
+- arrival reserve forcing a larger purchase
+- **a cheap station early where carrying fuel forward beats a later expensive mandatory stop**
+- a route feasible only after relaxation (assert `MIN_LEG_RELAXED`)
+- `maxStops` binding
+
+**That bolded case is the one that distinguishes the DP from a simple shortest path.** If it is missing, the test suite does not prove the algorithm is doing anything a greedy could not. Make sure it is in the suite.
+
+---
+
+## 16. Truck profiles
+
+The Volvo VNL figures below are **sourced averages from published specs and real-world reports, not CH Logistics's actual fleet.** Adjust once real numbers are available — each is a single UPDATE.
+
+| slug | display_name | tank_gal | mpg | reserve | max_leg | min_leg |
+|---|---|---|---|---|---|---|
+| `volvo-vnl-300` | Volvo VNL 300 — day cab, regional | 150 | 6.5 | 0.15 | 500 | 300 |
+| `volvo-vnl-760` | Volvo VNL 760 — sleeper, standard haul | 200 | 7.5 | 0.15 | 500 | 300 |
+| `volvo-vnl-860` | Volvo VNL 860 — dual tank, long haul | 250 | 7.2 | 0.15 | 500 | 300 |
+
+**Where these come from:**
+
+- **Tanks.** Volvo VNL tanks run 100–150 gallons each, with dual configurations totalling 200–300. For the VNL 860, capacity spans 125–275 gallons; dual tanks totalling 250 are the most common long-haul spec. Day cabs commonly run a 100 + 75 split.
+- **MPG.** Modern Class 8 trucks reach roughly 7–10 MPG under good highway conditions. The VNL 860 with the D13TC turbo-compound engine is reported at 7.9–8.5 MPG in mixed OTR driving; the 760 at 7.8–8.4. The figures above sit slightly below those, because published numbers skew toward optimised specs, new equipment and favourable conditions — loaded weight, terrain, weather and idle time all pull real fleet averages down.
+
+**MPG is the number worth correcting first.** It drives gallons purchased and therefore every dollar figure the app reports. **Tank capacity barely matters:** under a 500-mile cap, even the smallest profile carries 975 miles of range, so the tank is never the binding constraint. It only affects how much cheap fuel can be carried forward past an expensive mandatory stop (§5.4).
+
+Suggested physical spec for `volvo-vnl-860`, passed to the routing provider: 36,287 kg gross, 411 cm height, 259 cm width, 2,250 cm length, 5 axles.
+
+**Adding a fourth profile is an INSERT.** The schema in §12 carries `truck_number` so a profile can be tied to a real fleet unit when that matters.
+
+---
+
+## 17. Data retention and licensing
+
+| Data | Origin | Retention | Rationale |
+|---|---|---|---|
+| Station city/state/name/prices | BVD sheet | **Permanent** | Your own data |
+| Station coordinates (tier 1) | Love's store export | **Permanent** | Operator's own published site locations; no cap — §17.1 |
+| Station coordinates (tier 2) | OpenStreetMap | **Permanent** | ODbL — attribution required |
+| Station coordinates (tier 3) | Census Gazetteer | **Permanent** | US public domain |
+| Route geometry (`routes.line`, `polyline`, `legs`) | ORS | No licence cap; **cached 30 days anyway** | ODbL. The trigger does not discriminate — see below |
+| Route geometry, distances, matrix | HERE / Google *(if adopted)* | **30 days, contractually** | Their developer terms. Not in use in v1 |
+| Address geocodes (`saved_locations`) | whichever geocoder is used | **30 days** | Provider terms; the table carries its own expiry |
+| Recorded provider responses (test fixtures) | ORS | **Permanent** | ODbL. Committed with attribution so the suite runs offline. HERE fixtures would never be committed. |
+| Computed plans (`plans`, `plan_stops`) | Yours | **Permanent** | Your business record. Must not embed provider **geometry**; scalar distances are facts about a journey, not redistributable material. |
+
+**`routes` is a cache. `plans` and `plan_stops` are the record. Only the cache expires.**
+
+This distinction is the one people get wrong, and getting it wrong in either direction is costly. Nulling `plan_stops` on the theory that its distances are provider-derived destroys the audit trail — the thing you need when reconciling a plan against a driver's actual fuel receipts. Conversely, keeping `routes.line` past 30 days is a licence breach **under HERE or Google**; under ORS's ODbL it is merely stale.
+
+**The line between them: geometry is the shape, and it expires. A scalar is a measurement, and it stays.** `plan_stops.leg_distance_m` records that a truck was planned to travel 214.3 miles between two stops. That is a fact about your operation, in the same way `unit_price_usd` is — which is precisely why `plan_stops` stores the price as a literal number alongside the `station_price_id` foreign key rather than relying on a join.
+
+**Implementation:**
+
+- `routes.expires_at = computed_at + interval '30 days'`, **set by a trigger so it cannot be forgotten.** The trigger does not discriminate by provider: ORS rows expire on the same schedule even though ODbL would permit keeping them — partly so adopting HERE later needs no schema change, and partly because a routing result older than 30 days is stale for planning regardless of its licence.
+- A daily job nulls `line`, `polyline`, `legs` and any raw provider payload on expired rows. **The row itself stays** — `origin_geom`, `destination_geom`, `truck_profile_id`, `distance_m` and `duration_s` survive, so geometry can be re-fetched later without asking the dispatcher to re-enter anything.
+- Plans older than 30 days still render their table but return `"geometryExpired": true` instead of a broken polyline. Nothing is recomputed and no provider call is made just to display one.
+- Re-fetching expired geometry is one `route()` call. It writes to `routes` only — **never** to `plans` or `plan_stops`. The re-fetched line reflects *today's* road network, which may differ from the route as it stood when planned, so the stored totals remain authoritative and the fresh line is shown as an approximate shape. Silently overwriting `plans.total_distance_m` with the new figure would corrupt the historical record.
+- An expired row keeps its `UNIQUE (provider, request_hash)`, so the adapter upserts and refreshes `computed_at` rather than inserting a duplicate. The trigger is declared `BEFORE INSERT OR UPDATE OF computed_at` precisely so that refresh extends the window.
+- **Re-optimising an old route against that day's prices is a different operation producing a new plan**, not a restoration. `station_prices.valid_on` is permanent and dated, so this is always possible; it is the backtesting work in §20.
+- Attribution for the routing provider and for OSM ships **in the API response** so the frontend cannot omit it. Under ORS that is "© openrouteservice.org (HeiGIT)" plus "© OpenStreetMap contributors (ODbL)", and ODbL makes it a licence condition rather than a courtesy.
+
+**This is why permanent station coordinates never come from provider geocoding.** Otherwise you would re-geocode 605 stations every 30 days forever, or be out of compliance.
+
+### 17.1 The operator-data exception
+
+Love's publishes its own store list — store number, address, latitude and longitude — through its site locator. CH Logistics is a contracted customer of that fuel network, and **§11.4 verified the export matches 604 of the 605 BVD stations by store number, with the state field agreeing on all 604 independently.**
+
+This is admitted as tier 1 because the reason provider coordinates are barred does not apply to it:
+
+| | HERE / Google | Love's export |
+|---|---|---|
+| What it is | A licensed geocoding product | An operator saying where its own sites are |
+| Retention | Capped at 30 days by contract | No cap |
+| Purpose of publication | Sold as a data service | So customers can drive there |
+
+**The distinction is the source's relationship to the site, not the file format.** A third party's geocoding of a Love's address is still provider data and still capped; Love's own coordinate for its own store is not.
+
+It also carries operational facts no geocoder has — `StoreType`, `ParkingSpaces`, `DEFLanes` — which is what settles §11.5 from the operator directly rather than by inference from OSM tagging.
+
+**One thing the export must not be used for: prices.** The file contains a Love's retail price column and a notice that quotes may be delayed and all sales use the price posted at the time of fuelling. Those are street prices, not contract prices, and they are not what this app plans against. `stations.operator_attrs` stores location and amenity fields only. **Never prices.**
+
+**OSM and the Census remain in place as tiers 2 and 3.** The export is a snapshot the operator can change or withdraw, it covers only this one supplier, and a second supplier in a later phase may publish nothing at all. The fallback chain is what keeps that from being a rebuild.
+
+---
+
+## 18. Known risks and gaps
+
+| # | Risk | Severity | Mitigation |
+|---|---|---|---|
+| 1 | **Range gaps under the 500-mile cap** | **High** | 8 states absent, 8 more with ≤4 stations (§4.4). Actionable infeasible response returning candidates (§14). |
+| 1b | **Hard 300-mile floor narrows placement windows** | **High** | Some routes admit only a ~33-mile window for a stop. §5.1's automatic relaxation prevents dead ends. |
+| 2 | **Google Maps link is not truck-legal** | **Medium-High** | Explicit disclaimer in the payload. No worse than today, but a real gap between what is computed and what is driven. |
+| 3 | **The current migration does not run** | **Medium** | §12.1 item 1. Blocks step 1 entirely; a one-character fix plus a schema rewrite. |
+| 4 | Price staleness | Medium | §4.3 measured a 41¢/gal median daily swing. `priceAsOf` in every response; daily ingest. |
+| 5 | MPG variance ±10% | Medium | 15% reserve absorbs it; conservative bucket rounding (§15.3). |
+| 6 | A new brand appears in the sheet | Medium | Graceful degradation to `unresolved` + manual queue (§11.3). |
+| 7 | Volvo figures are sourced averages, not the real fleet | Low-Medium | Tank never binds under a 500-mile cap; MPG affects reported cost only. **Correct MPG first.** |
+| 8 | Accidental provider overspend | **Low in v1** | ORS needs no card, so the worst case is a refused call, not a bill. Budget guard throws regardless. Reverts to Medium if HERE is adopted. |
+| 9 | ORS truck data patchier than HERE's | Low in v1 | Only affects distance estimates and corridor membership, not the roads driven (§8.2). |
+| 10 | One station unresolvable by operator export | Low | Store #306 — a single manual coordinate entry (§11.4 step 4). |
+| 11 | BVD changes the sheet format | Low | Validation gate fails the import rather than corrupting data. All 31 January files share one header shape, so the format is stable in practice. |
+| 12 | Hours-of-service ignored | Low | `stop_type` enum reserves space. |
+| 13 | Single-supplier dependency | Low | `supplier` columns throughout — but see §12.1 item 7, which currently breaks this. |
+
+---
+
+## 19. Build order
+
+Numbered in the order they should be built. Nothing below is done.
+
+| # | Step | Done when |
+|---|---|---|
+| 1 | **Fix and rewrite the schema.** §12.1 — fix the syntax error, drop `effective_date UNIQUE`, add the missing tables, settle §21's naming questions. Load the Census Gazetteer. Seed 3 truck profiles + the `ULSD` product code. | `npm run db:reset` applies cleanly; a correct empty database |
+| 2 | **CSV ingest, single file, no geocoding.** §11.1 | 605 stations + 605 prices from the August sheet, with a clean validation report |
+| 3 | **Bulk import** (`/imports/batch` + CLI) and the **January 2026 backfill**. §11.2 | 30 days of real price history; the report names the 2026-01-11 gap and skips the byte-identical duplicate |
+| 4 | **Station resolution from the operator export.** §11.4 step 1 | 604/605 `exact`, store #306 queued for manual entry |
+| 5 | **Gazetteer fallback + manual review.** §11.4 steps 3–4 | 605/605 resolved |
+| 6 | **Routing adapter** — ORS behind §8.4's interface — **with the budget guard and both meters**. §8.3 | A truck route that differs from a car route at a known low bridge; real rate-limit figures recorded in §8.3 |
+| 7 | **Corridor query.** §15.4 — including stratified top-K and the `LEFT JOIN LATERAL` | Candidates for a route, eyeballed on a dev map |
+| 8 | **Optimiser strategy interface + `dp_v1`, tests first.** §13.1, §15.3 | Every §15.6 case passes. No database, no network. |
+| 9 | **Validation loop + two-pass relaxation.** §15.5, §5.1 | The 500-mile guarantee verified against measured distances, not predicted ones |
+| 10 | **Detour costing.** §15.4.1 — bracket model, two matrix calls | `detourEstimateError()` reports the estimate-vs-measurement gap |
+| 11 | **Address geocoding + `saved_locations`** with the 30-day expiry. §11.6 | `{address}` or `{lat,lng}` both accepted on `POST /plans` |
+| 12 | **Wire up `POST /plans` → `GET /plans/{id}`.** §14 | End-to-end plan, verified on a real lane |
+| 13 | **Google Maps URL builder + disclaimers.** §9.4 | Driver-shareable output; disclaimer wording pinned by a test |
+| 14 | **Auth** (Auth.js, one seeded account), enforced at the framework boundary. §13 | Anonymous requests get 307 for pages, 401 for API paths. Nothing exempt, including `/health`. |
+| 15 | **Frontend: MapLibre map + table.** §9 | Replaces the `trips.js` mock; both call meters visible |
+| 16 | **Deployment — Vercel + Neon.** §10 | v1 live |
+| 17 | **Stop penalty tuning.** §5.2 | Deferred deliberately — needs real lanes where a detour is actually taken. Do not tune against zero evidence. |
+
+**Two ordering notes, both deliberate:**
+
+**Steps 8 and 9 come before step 12.** The validation loop precedes the API surface because everything upstream measures distance along the *base* route. Until waypoints are inserted and the legs re-measured, a plan's 500-mile guarantee is a claim rather than a verified fact — and a claim like that should not be given an endpoint to serve it from.
+
+**Step 14 (auth) comes late, and sits in front of the API rather than inside it.** Keeping `src/api/` framework-free is what lets the whole API mount in a single Next route file and be tested without a server. Auth is a boundary concern; adding it early would mean every intermediate test carries a session.
+
+**Step 17 is intentionally last and may never be needed.** v3.4 reported that on a verified Dallas → Chicago lane every chosen stop had a measured detour of 0.0 miles, so the penalty term did no work at all — the 300-mile floor was the only structural control, exactly as §5.2 predicts. Tune only when a real lane actually takes a detour.
+
+---
+
+## 20. Future phases
+
+### Phase 2 — Automation and reach
+
+- **Gmail poller → automatic daily ingest.** Vercel Cron; `price_imports` is the seam, and the ingest service does not change.
+- **Canada support.** A second BVD CSV exists in the same format. Work required: `country` column already present; Statistics Canada gazetteer for place centroids; OSM coverage for Canadian truck stops; cross-border routing; litres/kilometres via the existing units toggle; CAD/USD handling.
+- Multi-stop deliveries (A→B→C)
+- Round trips (A→B→A) with joint cross-leg optimisation
+- User-defined truck profiles
+
+### Phase 3 — Measurement
+
+- **Receipt vs. plan backtesting.** Two input channels exist and they are not equally good:
+  - **Driver invoices** record spend and location per driver account. Structured or semi-structured data, and the **preferred path** — parsing an invoice export is ordinary data work.
+  - **Receipt photos, PDFs and paper** need OCR to extract station, date, gallons and price. A project in its own right.
+
+  Start with invoices. Photos are the fallback for gaps, not the primary source.
+- Metrics and graphs: spend over time, savings realised, price trends by state and corridor, station usage.
+- Plan accuracy: predicted vs actual gallons and cost. This is what finally corrects §16's MPG figures with real numbers.
+
+### Phase 4 — Intelligence
+
+- **Fuel price forecasting.** Needs the historical backfill; ten years is available in Gmail. §4.3's measured 41¢/gal daily swing is the signal to forecast against.
+- "Wait a day" recommendations when prices trend down.
+- Hours-of-service-aware stop placement.
+- More complex optimiser strategies dropped into the registry — no orchestration changes needed (§13.1).
+- Possible move to self-hosted routing, which eliminates retention caps but needs a persistent box.
+
+---
+
+## 21. Open questions
+
+These need answers before the steps that depend on them. None blocks step 1 except Q2 and Q3.
+
+| # | Question | Affects | Recommendation |
+|---|---|---|---|
+| **Q1** | **Drizzle or Kysely?** | §7, all data access | **Drizzle** — its schema-in-TypeScript pairs naturally with the drift test in §12.2. Kysely is the better pure query builder if you would rather write SQL. Either works; pick one and do not mix. |
+| **Q2** | **`reserve_fraction`: 0.15 (spec) or 0.10 (current migration)?** | §5.5, §12.1 item 6, step 1 | **0.15.** It absorbs the ±10% MPG error in §18 risk 5 with margin to spare, and tank capacity never binds anyway (§16). |
+| **Q3** | **`uuid` or `bigserial` primary keys?** | §12, step 1 | **`bigserial` for high-volume rows** (`station_prices`, `plan_stops`), **`uuid` for anything exposed in a URL** (`plans`, `stations`, `price_imports`). The current migration is all-bigserial; the spec is all-uuid. Mixed-by-rule is better than either blanket choice. |
+| **Q4** | **What is the real MPG of the fleet?** | §16, every dollar figure | Cannot be answered from here. Until it is, the app's costs are directionally right and absolutely wrong. Flag it in the UI. |
+| **Q5** | **Exact wording of the Google Maps disclaimer.** | §9.4, step 13 | Needs your sign-off since it is the one legal-ish statement a driver sees. Pin it with a test once agreed. |
+| **Q6** | **Does this count as business use for Vercel?** | §10, $20/mo | Almost certainly yes. Budget for Pro. |
+| **Q7** | **Ten-year backfill: all of it, or a recent window?** | §11.2, storage | Start with January 2026 (on disk). Extend once the pipeline is proven. 2.2M rows is not a storage problem; it is a "do not do it before it works" problem. |
+| **Q8** | **Is `min_leg_miles = 300` right, or was 350 better?** | §5.1 | 300 is the current decision. It was 350 through v3.3. The value is a profile column, not a constant — so this is tunable per truck rather than a one-way door. |
+
+---
+
+## 22. Rejected approaches
+
+Recorded so they do not get re-litigated. Each was seriously considered.
+
+### 22.1 "HERE's EV routing can be repurposed for diesel with a custom price table" — false
+
+`ev[makeReachable]=true` inserts stops from **HERE's own charging POI database**. No parameter accepts your own candidate list, and the engine has **no price term** — it optimises travel time plus charging time.
+
+**Consequence:** routing and stop selection are fully separate systems. This is the origin of §13's architecture.
+
+### 22.2 "Isolines are needed for range reachability" — not needed
+
+With stations snapped to a route polyline, reachability is one-dimensional subtraction (§15.3). ORS also caps isochrones at 120 km, far below any useful truck range.
+
+### 22.3 "Greedy refuelling is the right algorithm" — superseded
+
+Lin, Gertsch & Russell's optimality proof assumes free pass-by and no per-stop cost. Detours and the stop penalty violate both. More decisively, the problem is small enough that an exact DP costs milliseconds. Retained as `greedy_v1`, a comparison baseline only.
+
+A related earlier error: the classic greedy rule is **nearest cheaper**, not **cheapest within range**. Moot now, but it is the kind of mistake that looks right in a code review.
+
+### 22.4 "`PROD` needs careful disambiguation" — de-risked, guard retained
+
+One value today (`ULSD`, 605/605, and unchanged across all 31 January files). The `product_codes` mapping table stays as a **tripwire** for the day BVD adds dyed diesel or DEF — an unmapped code fails the row rather than being guessed at.
+
+### 22.5 "Purchases are fully determined by the next leg" — false under a relaxable floor
+
+Briefly concluded when the minimum leg was assumed strictly hard. Because the floor relaxes and the cap forces stops regardless of need, surplus fuel can be carried and used — so the fuel-level dimension is required. See §5.4.
+
+### 22.6 "`validity tstzrange` with an EXCLUDE constraint" — replaced by a plain date
+
+Earlier drafts modelled "valid until superseded". A sheet arrives every single day, so validity is always exactly one day. `valid_on date` with a unique constraint expresses the same guarantee more simply, keeps bulk backfill order-independent, and leaves a skipped day visible as a gap. §4.3's missing 2026-01-11 is the case that vindicates this.
+
+### 22.7 "Vercel cannot handle this workload" — retracted
+
+With Fluid Compute, Hobby gets 300s and Pro up to 800s. Plan computation is 3–10s of mostly I/O wait, which Active CPU billing does not charge for.
+
+### 22.8 "Geocoding needs a general-purpose pipeline" — massively simplified
+
+All 605 stations are Love's with distinct store numbers, and the operator's own export resolves 604 of them (§11.4, verified). This is a one-time script, not a subsystem. The fallback chain in §11.4 exists for new brands, not for this one.
+
+### 22.9 Python for the ingest pipeline — rejected
+
+See §7.1 for the full reasoning. Short version: the ingest must run behind both an HTTP endpoint and a CLI on a Vercel deployment, and it shares validation rules with the API. Python is permitted and encouraged for one-time analysis whose output is data rather than code.
+
+---
+
+## 23. Sources
+
+**Provider capability and terms**
+
+- HERE EV routing: <https://www.here.com/docs/bundle/routing-api-developer-guide-v8/page/concepts/ev-routing.html>
+- HERE developer terms (30-day cap): <https://developers.here.com/terms-and-conditions>
+- HERE plan restrictions: <https://www.here.com/get-started/pricing/limited-plan-restrictions>
+- HERE Vector Tile API with MapLibre: <https://docs.here.com/map-rendering/docs/maplibre>
+- Google Large Vehicle Routing GA, 17 Aug 2026: <https://mapsplatform.google.com/resources/blog/introducing-large-vehicle-routing-address-the-unique-logistics-needs-of-large-vehicle-fleets/>
+- Google Geocoding caching policy: <https://developers.google.com/maps/documentation/geocoding/policies>
+- OpenRouteService restrictions: <https://openrouteservice.org/restrictions/>
+- GraphHopper deployment resources: <https://github.com/graphhopper/graphhopper/blob/master/docs/core/deploy.md>
+
+**Infrastructure**
+
+- Vercel function limits: <https://vercel.com/docs/functions/limitations>
+- Vercel Fluid Compute limits: <https://vercel.com/changelog/higher-defaults-and-limits-for-vercel-functions-running-fluid-compute>
+
+**Data sources**
+
+- US Census Gazetteer: <https://www.census.gov/geographies/reference-files/time-series/geo/gazetteer-files.html>
+- OSM `amenity=fuel` tagging: <https://wiki.openstreetmap.org/wiki/Tag:amenity%3Dfuel>
+
+**Algorithms**
+
+- Lin, Gertsch & Russell (2007), *A linear-time algorithm for finding optimal vehicle refueling policies*, Oper. Res. Lett. 35(3):290–296
+- Khuller, Malekian & Mestre (2011), *To Fill or Not to Fill: The Gas Station Problem*, ACM Trans. Algorithms 7(3):36 — <https://www.cs.umd.edu/~samir/grant/gas-j.pdf>
+
+**Truck specifications**
+
+- Volvo VNL 860 tank configurations, Volvo VNL Gen II tank sizes, VNL 860 and 760 real-world MPG reports, Volvo VNL official specifications: <https://www.volvotrucks.ca/en-ca/trucks/vnl/specifications>
+
+**Project data — in this repository**
+
+- `data/bvd/pcn-usd-9206810-981.csv` — BVD price sheet, received 21 Aug 2026, effective 2026-08-22, 605 rows. Analysed 4 September 2026.
+- `data/bvd/2026-01/` — 31 files, 30 distinct dates (2026-01-01 to 2026-01-31, missing 01-11), 594 rows each. Analysed 4 September 2026.
+- `data/loves/LovesSearchResults.xlsx` — Love's operator export, 732 stores, header on row 3. Joined to BVD at 604/605. Analysed 4 September 2026.
