@@ -14,18 +14,24 @@
   "author": "",
   "private": true,
   "type": "commonjs",
-  "main": "index.js",
   "workspaces": [
-    "frontend"
+    "frontend",
+    "backend"
   ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "predev": "docker compose up -d",
     "dev": "npm run dev --workspace frontend",
     "build": "npm run build --workspace frontend",
-    "db:up": "docker compose up -d",
+    "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
-    "db:reset": "docker compose down -v && docker compose up -d",
-    "db:logs": "docker compose logs -f db"
+    "db:migrate": "npm run db:migrate --workspace backend",
+    "db:reset": "docker compose down -v && docker compose up -d --wait && npm run db:migrate",
+    "db:logs": "docker compose logs -f db",
+    "typecheck": "npm run typecheck --workspace backend",
+    "lint": "npm run lint --workspace frontend && npm run lint --workspace backend",
+    "test": "npm run test --workspace backend",
+    "test:unit": "npm run test:unit --workspace backend",
+    "verify": "npm run typecheck && npm run lint && npm test",
+    "prepare": "git config core.hooksPath .githooks"
   }
 }
