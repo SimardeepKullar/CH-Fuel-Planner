@@ -14,18 +14,18 @@
   "author": "",
   "private": true,
   "type": "commonjs",
-  "main": "index.js",
   "workspaces": [
-    "frontend"
+    "frontend",
+    "backend"
   ],
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "predev": "docker compose up -d",
     "dev": "npm run dev --workspace frontend",
     "build": "npm run build --workspace frontend",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && docker compose up -d",
-    "db:logs": "docker compose logs -f db"
+    "db:logs": "docker compose logs -f db",
+    "typecheck": "npm run typecheck --workspace backend"
   }
 }
