@@ -1,80 +1,92 @@
 CREATE EXTENSION IF NOT EXISTS postgis;
 
------------------------------------ Stations and Prices ---------------------------------------------
--- Table for the all the stations in the US.
-CREATE TABLE stations (
-	id 				bigserial PRIMARY KEY,
-	site_ref 		text NOT NULL UNIQUE,
-	name_raw 		text NOT NULL, -- "LOVES #368"
-	store_number 	integer, -- 368
-	city 			text NOT NULL,
-	state_usps 		char(2) NOT NULL,
-	geom 			geography (Point, 4326) -- NULL until resolved
-);
-CREATE INDEX stations_geom_gix ON stations USING GIST (geom);
-CREATE INDEX stations_store    ON stations (store_number);
+-- ─── Reference ───────────────────────────────────────────────────────────
 
--- Table for the price imports.
-CREATE TABLE price_imports (
-	id             	bigserial PRIMARY KEY,
-	file_name      	text     NOT NULL,
-	file_sha256    	char(64) NOT NULL UNIQUE,
-	effective_date 	date     NOT NULL UNIQUE,
-	row_count      	integer  NOT NULL,
-	imported_at    	timestamptz NOT NULL DEFAULT now()
+CREATE TABLE place_centroids (
+  state_usps       char(2) NOT NULL,
+  name_normalized  text    NOT NULL,
+  name_raw         text    NOT NULL,
+  geoid            text,
+  geom             geography(Point,4326) NOT NULL,
+  land_area_sqmi   numeric(10,4),
+  uncertainty_m    numeric(10,1) NOT NULL,
+  source           text NOT NULL,
+  PRIMARY KEY (state_usps, name_normalized)
 );
 
--- Table for station prices.
-CREATE TABLE station_prices (
-	id           	bigserial PRIMARY KEY,
-  	station_id   	bigint NOT NULL REFERENCES stations(id),
-	import_id    	bigint NOT NULL REFERENCES price_imports(id) ON DELETE CASCADE,
-	effective_on    date   NOT NULL,       -- ONE DAY. Not a range.
-	product_type 	text   NOT NULL,       -- mapped by hand, never defaulted
-
-	cost         	numeric(8,4) NOT NULL,
-	federal_tax  	numeric(8,4) NOT NULL,
-	state_tax    	numeric(8,4) NOT NULL,
-	sales_tax    	numeric(8,4) NOT NULL,
-	freight      	numeric(8,4) NOT NULL,
-	other        	numeric(8,4) NOT NULL,
-	total_cost   	numeric(8,4) NOT NULL,
-	retail_price 	numeric(8,4) NOT NULL,
-	your_price   	numeric(8,4) NOT NULL,
-	savings	  	 	numeric(8,4) NOT NULL,
-
-	UNIQUE (station_id, product_type, effective_on)
+CREATE TABLE product_codes (
+  supplier      text NOT NULL,
+  raw_code      text NOT NULL,
+  product_type  text NOT NULL
+    CHECK (product_type IN ('highway_diesel','off_road_diesel','gasoline','def','other')),
+  mapped_by     text NOT NULL,
+  mapped_at     timestamptz NOT NULL DEFAULT now(),
+  notes         text,
+  PRIMARY KEY (supplier, raw_code)
 );
-CREATE INDEX station_prices_lookup ON station_prices (effective_on, product_type, station_id);
 
------------------------------------ Routes, Plans and Budget ----------------------------------------
--- Table for the routes. 
-CREATE TABLE routes (
-	id          	bigserial PRIMARY KEY,
-	request_hash 	char(64) NOT NULL UNIQUE,  -- sha256 of the ORS request
-	line         	geography(LineString,4326) NOT NULL,
-	polyline     	text    NOT NULL,          -- precision-5, for the map
-	distance_m   	numeric(12,1) NOT NULL,    -- metres live INSIDE the adapter
-	duration_s   	numeric(12,1) NOT NULL,
-	computed_at  	timestamptz NOT NULL DEFAULT now(),
-	expires_at   	timestamptz NOT NULL
+-- ─── Users and locations ─────────────────────────────────────────────────
+
+CREATE TABLE users (
+  id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email         text UNIQUE NOT NULL,
+  password_hash text NOT NULL,
+  display_name  text NOT NULL,
+  role          text NOT NULL DEFAULT 'dispatcher'
+                  CHECK (role IN ('dispatcher','driver','admin')),
+  created_at    timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX routes_line_gix ON routes USING GIST (line);
 
----------------------------------------------- Trucks -----------------------------------------------
-CREATE TABLE trucks (
-	id               bigserial PRIMARY KEY,
-	truck_number     integer NOT NULL UNIQUE,  -- e.g. 247 — the fleet unit number
-
-	-- Truck dimensions and weight
-	height_m         numeric(4,2) NOT NULL,
-	width_m          numeric(4,2) NOT NULL,
-	length_m         numeric(5,2) NOT NULL,
-	weight_t         numeric(5,2) NOT NULL,
-
-	-- Fuel model
-	tank_gallons     numeric(6,1) NOT NULL,
-	avg_mpg          numeric(4,2) NOT NULL,
-	reserve_fraction numeric(4,3) NOT NULL DEFAULT 0.100,
-	max_leg_miles    numeric(6,1) NOT NULL DEFAULT 500
+CREATE TABLE saved_locations (
+  id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  label          text,
+  address_raw    text NOT NULL,
+  address_norm   text NOT NULL UNIQUE,
+  geom           geography(Point,4326) NOT NULL,
+  geocode_source text NOT NULL,
+  geocoded_at    timestamptz NOT NULL DEFAULT now(),
+  expires_at     timestamptz NOT NULL,     -- provider geocodes: 30-day cap
+  use_count      integer NOT NULL DEFAULT 0
 );
+
+-- ─── Truck profiles ──────────────────────────────────────────────────────
+
+CREATE TABLE truck_profiles (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  slug                 text NOT NULL,
+  display_name         text NOT NULL,
+  truck_number         integer UNIQUE,          -- fleet unit number, if assigned
+  owner_user_id        uuid REFERENCES users(id),
+  is_system            boolean NOT NULL DEFAULT false,
+  is_active            boolean NOT NULL DEFAULT true,
+
+  -- fuel model (§5)
+  tank_gallons         numeric(6,1) NOT NULL CHECK (tank_gallons > 0),
+  avg_mpg              numeric(4,2) NOT NULL CHECK (avg_mpg > 0),
+  reserve_fraction     numeric(4,3) NOT NULL DEFAULT 0.150
+                         CHECK (reserve_fraction >= 0 AND reserve_fraction < 0.5),
+  max_leg_miles        numeric(6,1) NOT NULL DEFAULT 500,
+  min_leg_miles        numeric(6,1) NOT NULL DEFAULT 300,
+  max_gallons_per_fill numeric(6,1),
+
+  -- physical spec → routing provider
+  gross_weight_kg      integer,
+  height_cm            integer,
+  width_cm             integer,
+  length_cm            integer,
+  axle_count           smallint,
+  trailer_count        smallint,
+  hazmat_class         text,
+
+  -- cost model
+  cost_per_mile_usd    numeric(6,3) NOT NULL DEFAULT 0.000,
+  fixed_stop_minutes   integer      NOT NULL DEFAULT 20,
+
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  updated_at           timestamptz NOT NULL DEFAULT now(),
+
+  CHECK (min_leg_miles <= max_leg_miles)
+);
+
+CREATE UNIQUE INDEX truck_profiles_owner_slug ON truck_profiles
+  (COALESCE(owner_user_id,'00000000-0000-0000-0000-000000000000'::uuid), slug);
