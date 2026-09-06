@@ -76,5 +76,5 @@ CREATE TABLE trucks (
 	tank_gallons     numeric(6,1) NOT NULL,
 	avg_mpg          numeric(4,2) NOT NULL,
 	reserve_fraction numeric(4,3) NOT NULL DEFAULT 0.100,
-	max_leg_miles    numeric(6,1) NOT NULL DEFAULT 500,
+	max_leg_miles    numeric(6,1) NOT NULL DEFAULT 500
 );

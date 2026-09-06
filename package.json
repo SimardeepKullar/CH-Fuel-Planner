@@ -22,9 +22,10 @@
     "predev": "docker compose up -d",
     "dev": "npm run dev --workspace frontend",
     "build": "npm run build --workspace frontend",
-    "db:up": "docker compose up -d",
+    "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
-    "db:reset": "docker compose down -v && docker compose up -d",
+    "db:migrate": "npm run db:migrate --workspace backend",
+    "db:reset": "docker compose down -v && docker compose up -d --wait && npm run db:migrate",
     "db:logs": "docker compose logs -f db",
     "typecheck": "npm run typecheck --workspace backend",
     "test": "npm run test --workspace backend"
