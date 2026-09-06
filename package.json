@@ -26,6 +26,7 @@
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && docker compose up -d",
     "db:logs": "docker compose logs -f db",
-    "typecheck": "npm run typecheck --workspace backend"
+    "typecheck": "npm run typecheck --workspace backend",
+    "test": "npm run test --workspace backend"
   }
 }
