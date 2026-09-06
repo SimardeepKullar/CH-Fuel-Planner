@@ -14,7 +14,7 @@ describe("units", () => {
   });
 
   it("formats unit numbers with a three-digit zero-pad", () => {
-    expect(formatUnitNumber(22)).toBe("DELIBERATELY WRONG, PROVING THE CI GATE");
+    expect(formatUnitNumber(22)).toBe("022");
     expect(formatUnitNumber(7)).toBe("007");
   });
 
