@@ -671,7 +671,9 @@ Match on brand plus store number, which in practice comes from the `website` URL
 
 > ⚠️ **Unverified, carried from v3.4:** OSM holds 489 distinct Love's sites against BVD's 605; one site is often several fuel features (`Love's (Trucks)`, `Love's (Cars)`) so clustering at ~400 m is required first; only 129 stations match by store number. **OSM alone is not sufficient** — which step 1's 604/605 makes moot for v1. Re-measure only if a second supplier arrives.
 
-**Step 3 — Census Gazetteer centroids.** Places plus county subdivisions. Uncertainty radius `r = sqrt(ALAND_SQMI / π)`. Reported to resolve 595 of 605 at city accuracy. This is the fallback for a brand that publishes nothing.
+**Step 3 — Census Gazetteer centroids.** Places plus county subdivisions. Uncertainty radius `r = sqrt(ALAND_SQMI / π)`, in miles from the source data, **converted to meters** (`× 1609.344`) before storage in `uncertainty_m` — every other `_m` column in the schema is meters, and the `u < 8 km` eligibility rule below only makes sense compared in the same unit. Reported to resolve 595 of 605 at city accuracy. This is the fallback for a brand that publishes nothing.
+
+Loaded by `scripts/load_gazetteer.py` (T-03) from the Census Bureau's national Gazetteer files, restricted to the 50 states plus DC (§4.4 — this app is US-only). Where a Place and a County Subdivision would claim the same `(state, name_normalized)` key, the Place wins.
 
 **Step 4 — Manual review** of the remainder. Given step 1, that is **one station** (#306). Read its coordinates from an approved source; a coordinate copied from a provider's map is still provider data (§17).
 
@@ -1486,13 +1488,13 @@ At minimum, and all runnable with no database and no network:
 
 ## 16. Truck profiles
 
-The Volvo VNL figures below are **sourced averages from published specs and real-world reports, not CH Logistics's actual fleet.** Adjust once real numbers are available — each is a single UPDATE.
+The Volvo VNL figures below are **sourced averages from published specs and real-world reports, not CH Logistics's actual fleet.** Adjust once real numbers are available — each is a single UPDATE. `truck_number` is likewise a **placeholder** pending the real fleet roster — dispatchers identify a truck by its fleet unit number (D6), not its model name, so seeding one from day one keeps the selector meaningful; correct it the same way, with a single UPDATE.
 
-| slug | display_name | tank_gal | mpg | reserve | max_leg | min_leg |
-|---|---|---|---|---|---|---|
-| `volvo-vnl-300` | Volvo VNL 300 — day cab, regional | 150 | 6.5 | 0.15 | 500 | 300 |
-| `volvo-vnl-760` | Volvo VNL 760 — sleeper, standard haul | 200 | 7.5 | 0.15 | 500 | 300 |
-| `volvo-vnl-860` | Volvo VNL 860 — dual tank, long haul | 250 | 7.2 | 0.15 | 500 | 300 |
+| slug | display_name | truck_number | tank_gal | mpg | reserve | max_leg | min_leg |
+|---|---|---|---|---|---|---|---|
+| `volvo-vnl-300` | Volvo VNL 300 — day cab, regional | 022 | 150 | 6.5 | 0.15 | 500 | 300 |
+| `volvo-vnl-760` | Volvo VNL 760 — sleeper, standard haul | 056 | 200 | 7.5 | 0.15 | 500 | 300 |
+| `volvo-vnl-860` | Volvo VNL 860 — dual tank, long haul | 091 | 250 | 7.2 | 0.15 | 500 | 300 |
 
 **Where these come from:**
 

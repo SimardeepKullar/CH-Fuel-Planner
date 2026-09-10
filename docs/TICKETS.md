@@ -275,9 +275,10 @@ Tests are co-located as `*.test.ts` beside the unit under test. Integration test
 **Why.** §19 folds this into step 1, but the gazetteer load is a bulk job with its own failure modes and belongs apart from a schema migration. The seeded user is new, required by D7.
 
 **Files — new**
-- `migrations/0002_seed.sql` — the three §16 profiles (`volvo-vnl-300` 150 gal / 6.5 mpg, `volvo-vnl-760` 200 / 7.5, `volvo-vnl-860` 250 / 7.2, all reserve 0.15, max leg 500, min leg 300), the `('BVD','ULSD','highway_diesel','seed',…)` product code, and the `volvo-vnl-860` physical spec for the router (36,287 kg, 411 cm, 259 cm, 2,250 cm, 5 axles).
-- `scripts/load_gazetteer.py` + `scripts/requirements.txt` — Census Places and County Subdivisions into `place_centroids`, uncertainty `r = sqrt(ALAND_SQMI / π)`. Python is the right tool here per §7.1 and its output is rows, not code.
-- `backend/src/cli/seed.ts` — creates the dispatcher account from env (`SEED_USER_EMAIL`, `SEED_USER_PASSWORD`), hashing the password. Refuses to overwrite an existing user.
+- `migrations/0002_seed.sql` — the three §16 profiles (`volvo-vnl-300` 150 gal / 6.5 mpg, `volvo-vnl-760` 200 / 7.5, `volvo-vnl-860` 250 / 7.2, all reserve 0.15, max leg 500, min leg 300), each carrying a placeholder `truck_number` (022 / 056 / 091 — dispatchers identify a truck by fleet number, not model name), the `('BVD','ULSD','highway_diesel','seed',…)` product code, and the `volvo-vnl-860` physical spec for the router (36,287 kg, 411 cm, 259 cm, 2,250 cm, 5 axles).
+- `scripts/load_gazetteer.py` + `scripts/requirements.txt` — Census Places and County Subdivisions into `place_centroids`, uncertainty `r = sqrt(ALAND_SQMI / π)` converted to meters. Python is the right tool here per §7.1 and its output is rows, not code.
+- `backend/src/domain/password.ts` — `hashPassword`/`verifyPassword` (scrypt, Node's built-in `crypto`, no new dependency). Pure, framework-free — T-05's `authorize()` imports `verifyPassword` from here rather than re-implementing it.
+- `backend/src/cli/seed.ts` — creates the dispatcher account from env (`SEED_USER_EMAIL`, `SEED_USER_PASSWORD`, optional `SEED_USER_DISPLAY_NAME`), hashing the password via `domain/password.ts`. Refuses to overwrite an existing user.
 
 **Dependencies.** T-02.
 
@@ -346,7 +347,7 @@ Tests are co-located as `*.test.ts` beside the unit under test. Integration test
 **Files — new**
 - `frontend/src/app/signin/page.tsx` — email + password form, error state for bad credentials.
 - `frontend/src/app/api/auth/[...nextauth]/route.ts` — Auth.js credentials provider, JWT sessions.
-- `frontend/src/auth.ts` — Auth.js config; `authorize()` verifies the hash from `users.password_hash`.
+- `frontend/src/auth.ts` — Auth.js config; `authorize()` verifies the hash from `users.password_hash` via `verifyPassword()` from `backend/src/domain/password.ts` (already built in T-03 for `seed.ts` — not re-implemented here).
 - `frontend/middleware.ts` — the §13 boundary: **307** to `/signin` for a page request, **401** `application/problem+json` for an `/api/` path. Nothing exempt, including `/health`. A redirect answering `fetch` with a sign-in page at status 200 is the confusing failure this split exists to prevent.
 - `backend/src/api/app.ts` — `createApp({ authRequired })`. The API is *told* whether it is protected; it does not assert it.
 - `backend/src/catalog/users.ts` — lookup and password verification.
