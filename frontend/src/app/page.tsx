@@ -1,20 +1,22 @@
-import { useState } from "react";
-import Header from "./components/Header.jsx";
-import PlanTab from "./components/PlanTab.jsx";
-import RecentTab from "./components/RecentTab.jsx";
-import DevToolsTab from "./components/DevToolsTab.jsx";
-import { trips, trucks } from "./data/trips.js";
-import "./App.css";
+"use client";
 
-export default function App() {
+import { useState } from "react";
+import Header from "../components/Header.jsx";
+import PlanTab from "../components/PlanTab.jsx";
+import RecentTab from "../components/RecentTab.jsx";
+import DevToolsTab from "../components/DevToolsTab.jsx";
+import { trips, trucks } from "../data/trips.js";
+import "../App.css";
+
+export default function Page() {
   const [activeTab, setActiveTab] = useState("plan");
   const [currentTripId, setCurrentTripId] = useState(trips[0].id);
   const [truck, setTruck] = useState(trips[0].truck);
 
-  const currentTrip = trips.find((t) => t.id === currentTripId);
+  const currentTrip = trips.find((t) => t.id === currentTripId) ?? trips[0];
 
-  function openTrip(id) {
-    const trip = trips.find((t) => t.id === id);
+  function openTrip(id: string) {
+    const trip = trips.find((t) => t.id === id) ?? trips[0];
     setCurrentTripId(id);
     setTruck(trip.truck);
     setActiveTab("plan");
