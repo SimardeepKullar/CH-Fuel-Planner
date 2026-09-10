@@ -234,7 +234,7 @@ Tests are co-located as `*.test.ts` beside the unit under test. Integration test
 **Files — new**
 - `migrations/0001_init.sql` — **full rewrite** (see below).
 - `backend/src/db/schema.ts` — hand-maintained descriptor of every table, column, type, nullability and constraint.
-- `backend/src/db/drift.test.ts` — compares that descriptor against `information_schema` on every run.
+- `backend/test/integration/drift.test.ts` — compares that descriptor against `information_schema` on every run. **Not `src/db/drift.test.ts` as originally specified:** it needs a live database, and `test:unit` — the pre-commit gate, which declares itself "Fast gate: no database" — excludes `test/integration/` by path. Under `src/` it would run in that gate and fail whenever Docker was not up. The comparison function itself is pure and lives in `schema.ts`, so the fault-injection cases need no database.
 - `backend/src/db/types.ts` — row interfaces per table.
 
 **What specifically changes in `migrations/0001_init.sql`.** All eleven §12.1 items:

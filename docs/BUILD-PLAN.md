@@ -198,7 +198,9 @@ Then `plans`, `plan_stops`, `import_batches`, `import_rejections`, `provider_usa
 
 **Goal.** Code and database cannot drift silently.
 
-**Files.** New: `backend/src/db/schema.ts`, `backend/src/db/types.ts`, `backend/src/db/drift.test.ts`.
+**Files.** New: `backend/src/db/schema.ts`, `backend/src/db/types.ts`, `backend/test/integration/drift.test.ts`.
+
+**Why the test is not at `src/db/drift.test.ts`** as first specified: it needs a live database, and `test:unit` — the pre-commit gate, which declares itself "Fast gate: no database" — excludes `test/integration/` by path. Under `src/` it would run inside that gate and fail whenever Docker was not up. `diffSchema()` itself is pure and lives in `schema.ts`, so the fault-injection cases need no database.
 
 **Logic.** §12.2 assumes a query builder whose schema definition doubles as the mirror. Under D1 there is no such definition, so `schema.ts` is a hand-maintained descriptor — table, column, type, nullability, default, constraint — compared against `information_schema` on every test run. It costs discipline and buys the same guarantee.
 
