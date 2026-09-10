@@ -72,9 +72,11 @@ The wireframe draws a fake diagonal with pins positioned by index
 | Candidate dots ("candidate, not chosen") | `candidateStations[].location.{lat,lng}` |
 | Baseline route, if it is ever drawn | `baseline.polyline` — present in §14, unused by this design |
 
-Geometry expiry (§14) applies: when `geometryExpired: true`, the map panel needs
-a defined empty state. **The design does not have one.** Flagging it rather than
-inventing it.
+Geometry expiry **no longer applies in v1.** §17 was revised on 10 September 2026
+to drop route-geometry expiry — ORS is ODbL and carries no storage cap — so
+`geometryExpired` is never returned and a plan of any age draws its map. The
+missing empty state is therefore no longer a gap. It becomes one again if a
+contractually capped provider (HERE, Google) is adopted.
 
 ### 3.2 Fuel-stop hover card
 
@@ -387,7 +389,9 @@ express them:
 - `status: "infeasible"` — §14 returns a structured `reason` with suggestions
   and still returns `candidateStations`. That is a rich payload with nowhere to
   go.
-- `geometryExpired: true` — plan older than 30 days, table renders, map cannot.
+- ~~`geometryExpired: true`~~ — **no longer applicable in v1.** Route geometry
+  does not expire under ORS (§17, revised 10 September 2026), so the field is
+  never returned. Returns only with a contractually capped provider.
 - **Disclaimers.** §14 returns a `disclaimers[]` array and guarantees at least
   one entry on every plan. The design surfaces none of them.
 - Empty states: no recent trips, no candidates in corridor, no price sheet

@@ -198,21 +198,15 @@ describe.skipIf(!hasDatabase)("0001_init.sql (integration)", () => {
   async function insertRoute(
     truckProfileId: string,
     requestHash: string,
-    computedAt?: string,
-  ): Promise<{ id: string; computed_at: Date; expires_at: Date }> {
-    const { rows } = await scopedPool.query<{
-      id: string;
-      computed_at: Date;
-      expires_at: Date;
-    }>(
+  ): Promise<{ id: string; computed_at: Date }> {
+    const { rows } = await scopedPool.query<{ id: string; computed_at: Date }>(
       `INSERT INTO routes
          (provider, request_hash, origin_geom, destination_geom, truck_profile_id,
-          distance_m, duration_s${computedAt ? ", computed_at" : ""})
+          distance_m, duration_s)
        VALUES ('ors', $1, ST_SetSRID(ST_MakePoint(-111, 32), 4326)::geography,
-               ST_SetSRID(ST_MakePoint(-112, 33), 4326)::geography, $2, 1000, 3600
-               ${computedAt ? ", $3" : ""})
-       RETURNING id, computed_at, expires_at`,
-      computedAt ? [requestHash, truckProfileId, computedAt] : [requestHash, truckProfileId],
+               ST_SetSRID(ST_MakePoint(-112, 33), 4326)::geography, $2, 1000, 3600)
+       RETURNING id, computed_at`,
+      [requestHash, truckProfileId],
     );
     const row = rows[0];
     if (!row) throw new Error("insertRoute failed");
@@ -237,43 +231,32 @@ describe.skipIf(!hasDatabase)("0001_init.sql (integration)", () => {
     return id;
   }
 
-  it("sets expires_at = computed_at + 30 days without the caller supplying it", async () => {
-    const truckProfileId = await insertTruckProfile("route-truck-1");
-    const route = await insertRoute(truckProfileId, "h".repeat(64));
-    const { rows } = await scopedPool.query<{ diff_days: string }>(
-      `SELECT extract(epoch FROM ($1::timestamptz - $2::timestamptz)) / 86400 AS diff_days`,
-      [route.expires_at, route.computed_at],
+  // §17, decided 10 September 2026: ORS geometry is ODbL and carries no storage
+  // cap, so v1 has no expiry at all. Pinned so a reinstatement is deliberate.
+  it("has no expires_at column and no expiry trigger on routes", async () => {
+    const { rows: columns } = await scopedPool.query<{ column_name: string }>(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = 'routes'`,
+      [schema],
     );
-    expect(Number(rows[0]?.diff_days)).toBeCloseTo(30, 5);
-  });
+    const columnNames = columns.map((c) => c.column_name);
+    // Guards the negative assertion below: a wrong filter returning zero rows
+    // would make "not.toContain" pass without proving anything.
+    expect(columnNames).toContain("computed_at");
+    expect(columnNames).not.toContain("expires_at");
 
-  it("extends expires_at when computed_at is updated, but not on an unrelated column update", async () => {
-    const truckProfileId = await insertTruckProfile("route-truck-2");
-    const route = await insertRoute(truckProfileId, "i".repeat(64));
-
-    const newComputedAt = "2026-06-01T00:00:00Z";
-    await scopedPool.query(`UPDATE routes SET computed_at = $1 WHERE id = $2`, [
-      newComputedAt,
-      route.id,
-    ]);
-    const { rows: afterComputedAtUpdate } = await scopedPool.query<{
-      expires_at: Date;
-    }>(`SELECT expires_at FROM routes WHERE id = $1`, [route.id]);
-    const { rows: diffRows } = await scopedPool.query<{ diff_days: string }>(
-      `SELECT extract(epoch FROM ($1::timestamptz - $2::timestamptz)) / 86400 AS diff_days`,
-      [afterComputedAtUpdate[0]?.expires_at, newComputedAt],
+    const { rows: triggers } = await scopedPool.query<{ trigger_name: string }>(
+      `SELECT trigger_name FROM information_schema.triggers
+       WHERE trigger_schema = $1 AND event_object_table = 'routes'`,
+      [schema],
     );
-    expect(Number(diffRows[0]?.diff_days)).toBeCloseTo(30, 5);
+    expect(triggers).toEqual([]);
 
-    await scopedPool.query(`UPDATE routes SET distance_m = 9999 WHERE id = $1`, [
-      route.id,
-    ]);
-    const { rows: afterUnrelatedUpdate } = await scopedPool.query<{
-      expires_at: Date;
-    }>(`SELECT expires_at FROM routes WHERE id = $1`, [route.id]);
-    expect(afterUnrelatedUpdate[0]?.expires_at.getTime()).toBe(
-      afterComputedAtUpdate[0]?.expires_at.getTime(),
+    const { rows: fn } = await scopedPool.query<{ reg: string | null }>(
+      `SELECT to_regproc($1) AS reg`,
+      [`${schema}.set_route_expiry`],
     );
+    expect(fn[0]?.reg).toBeNull();
   });
 
   it("nulls line, polyline and legs on an existing route", async () => {

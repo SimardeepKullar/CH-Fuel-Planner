@@ -452,7 +452,7 @@ HERE remains the better truck-data product. It is deferred because **v1 cannot c
 
 Paying for better upstream truck data while the downstream link is a car route closes the gap at one end of the pipeline only.
 
-**What deferring buys.** No card, no account, and — because ODbL carries no storage cap — the 30-day retention job becomes optional rather than mandatory. That is real engineering work avoided.
+**What deferring buys.** No card, no account, and — because ODbL carries no storage cap — the 30-day retention job is **dropped from v1 entirely** (§17), taking the expiry trigger and the `geometryExpired` response field with it. That is real engineering work avoided, and it comes back only with HERE.
 
 **The named trigger for revisiting.** Adopt HERE when either becomes true:
 
@@ -924,6 +924,10 @@ CREATE INDEX station_prices_lookup ON station_prices (valid_on, product_type, st
 
 -- ─── Routes and plans ────────────────────────────────────────────────────
 
+-- ORS geometry is ODbL and carries no storage cap, so v1 keeps it indefinitely
+-- and there is no expiry column or trigger. Geometry stays nullable: adopting a
+-- contractually capped provider (HERE, Google) reintroduces expiry, and the
+-- retention job then needs somewhere to null it to. See §17.
 CREATE TABLE routes (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   provider         text NOT NULL,
@@ -932,31 +936,16 @@ CREATE TABLE routes (
   destination_geom geography(Point,4326) NOT NULL,
   truck_profile_id uuid NOT NULL REFERENCES truck_profiles(id),
   via_hash         char(64),
-  line             geography(LineString,4326),   -- NULLABLE: expires, see §17
-  polyline         text,                         -- NULLABLE: expires
-  legs             jsonb,                        -- NULLABLE: expires
+  line             geography(LineString,4326),   -- NULLABLE: see §17
+  polyline         text,                         -- NULLABLE: see §17
+  legs             jsonb,                        -- NULLABLE: see §17
   distance_m       numeric(12,1) NOT NULL,       -- scalar: permanent
   duration_s       integer NOT NULL,             -- scalar: permanent
   computed_at      timestamptz NOT NULL DEFAULT now(),
-  expires_at       timestamptz NOT NULL,
   UNIQUE (provider, request_hash)
 );
 
 CREATE INDEX routes_line_gix ON routes USING GIST (line);
-CREATE INDEX routes_expiry   ON routes (expires_at);
-
--- expires_at is set by a trigger, never by application code, so the 30-day
--- retention cap cannot be forgotten. See §17.
-CREATE OR REPLACE FUNCTION set_route_expiry() RETURNS trigger AS $$
-BEGIN
-  NEW.expires_at := COALESCE(NEW.computed_at, now()) + interval '30 days';
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER routes_set_expiry
-  BEFORE INSERT OR UPDATE OF computed_at ON routes
-  FOR EACH ROW EXECUTE FUNCTION set_route_expiry();
 
 CREATE TABLE plans (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1059,7 +1048,7 @@ CREATE TABLE provider_quota (        -- theirs: an observed rate limit, no state
 | 7 | `stations.site_ref` is `UNIQUE` alone, not `(supplier, site_ref)` | Fine for one supplier; breaks the moment a second one shares a site ID. | Change to a composite unique with a `supplier` column. |
 | 8 | `stations` has no `resolution`, `uncertainty_m`, `truck_accessible`, `operator_attrs` | §11.4's tier model and §11.5's accessibility cannot be recorded. | Add. |
 | 9 | `station_prices.effective_on` vs spec's `valid_on`; no generated price columns; unique is `(station_id, product_type, effective_on)` not `(station_id, raw_product, valid_on)` | Naming drift, plus keying on the mapped type rather than the raw code loses the ability to carry two raw codes that map to one type. | Rename and re-key. |
-| 10 | `routes.line` and `polyline` are `NOT NULL`; no `provider`, no expiry trigger | §17's expiry job cannot null the geometry, so the retention model is unimplementable as written. | Make geometry nullable, add `provider`, add the trigger. |
+| 10 | `routes.line` and `polyline` are `NOT NULL`; no `provider` | Geometry cannot be nulled, so adopting a capped provider later would need a schema change rather than a job. | Make geometry nullable, add `provider`. No expiry column or trigger in v1 — see §17. |
 | 11 | All keys are `bigserial`, spec uses `uuid` | Cosmetic, but mixed styles are worse than either. | Pick one (§21 Q3). |
 
 **Recommended approach:** rather than a chain of `ALTER TABLE` migrations against a schema that has never successfully applied and holds no data, **rewrite `0001_init.sql`.** There is nothing to preserve. Once real data is loaded, switch to additive migrations permanently.
@@ -1317,9 +1306,9 @@ Both endpoints accept `{ "address": "…" }` or `{ "lat": …, "lng": … }`.
 
 Given §4.4's thin coverage in CT/NJ/WV/MD/SD/ID/MN/MT, this **will** fire on real lanes. Returning candidates alongside the failure lets the dispatcher fall back to judgement rather than hitting a dead end. An infeasible plan is a legitimate answer, not an error — it is persisted with `status = 'infeasible'`, not discarded.
 
-### Geometry expiry
+### Geometry expiry — not in v1
 
-A plan older than 30 days still renders its table but returns `"geometryExpired": true` instead of a broken polyline. Nothing is recomputed and no provider call is made just to display one. See §17.
+Route geometry does not expire under ORS, so **no `geometryExpired` field is returned in v1** and a plan of any age renders its map. Adopting a contractually capped provider reintroduces both the expiry and the field, whose behaviour is specified in §17: the table still renders, the map does not, and nothing is recomputed to display one.
 
 ---
 
@@ -1528,27 +1517,34 @@ Suggested physical spec for `volvo-vnl-860`, passed to the routing provider: 36,
 | Station coordinates (tier 1) | Love's store export | **Permanent** | Operator's own published site locations; no cap — §17.1 |
 | Station coordinates (tier 2) | OpenStreetMap | **Permanent** | ODbL — attribution required |
 | Station coordinates (tier 3) | Census Gazetteer | **Permanent** | US public domain |
-| Route geometry (`routes.line`, `polyline`, `legs`) | ORS | No licence cap; **cached 30 days anyway** | ODbL. The trigger does not discriminate — see below |
+| Route geometry (`routes.line`, `polyline`, `legs`) | ORS | **Permanent** | ODbL carries no storage cap — see below |
 | Route geometry, distances, matrix | HERE / Google *(if adopted)* | **30 days, contractually** | Their developer terms. Not in use in v1 |
 | Address geocodes (`saved_locations`) | whichever geocoder is used | **30 days** | Provider terms; the table carries its own expiry |
 | Recorded provider responses (test fixtures) | ORS | **Permanent** | ODbL. Committed with attribution so the suite runs offline. HERE fixtures would never be committed. |
 | Computed plans (`plans`, `plan_stops`) | Yours | **Permanent** | Your business record. Must not embed provider **geometry**; scalar distances are facts about a journey, not redistributable material. |
 
-**`routes` is a cache. `plans` and `plan_stops` are the record. Only the cache expires.**
+**`routes` is a cache. `plans` and `plan_stops` are the record. Nothing expires in v1.**
 
-This distinction is the one people get wrong, and getting it wrong in either direction is costly. Nulling `plan_stops` on the theory that its distances are provider-derived destroys the audit trail — the thing you need when reconciling a plan against a driver's actual fuel receipts. Conversely, keeping `routes.line` past 30 days is a licence breach **under HERE or Google**; under ORS's ODbL it is merely stale.
+This distinction is still the one people get wrong, and it still matters — but in v1 it governs *what may be overwritten*, not *what gets deleted*. Nulling `plan_stops` on the theory that its distances are provider-derived destroys the audit trail — the thing you need when reconciling a plan against a driver's actual fuel receipts. Keeping `routes.line` indefinitely would be a licence breach **under HERE or Google**; under ORS's ODbL it is permitted outright, which is why v1 keeps it.
 
-**The line between them: geometry is the shape, and it expires. A scalar is a measurement, and it stays.** `plan_stops.leg_distance_m` records that a truck was planned to travel 214.3 miles between two stops. That is a fact about your operation, in the same way `unit_price_usd` is — which is precisely why `plan_stops` stores the price as a literal number alongside the `station_price_id` foreign key rather than relying on a join.
+**Decided 10 September 2026: route geometry does not expire in v1.** ORS is the only routing provider and ODbL imposes no storage cap, so the 30-day cap the earlier design applied to every provider alike had no licence behind it. The remaining argument for expiring anyway was that a routing result older than 30 days is stale for planning — but stored geometry is only ever used to *draw* a historical plan, never to plan against, and the plan's authoritative figures are already scalars in `plans`/`plan_stops`. A cached line is in fact the more faithful record of what was planned than a re-fetch would be, since a re-fetch reflects today's road network. An old plan is read as historical reference, not as current truth. This removes `routes.expires_at`, the `set_route_expiry()` trigger, the retention job and the `geometryExpired` response field from v1; adopting HERE or Google reintroduces all four, and the notes below are kept for that day.
 
-**Implementation:**
+**The line between them: geometry is the shape, and it is a cache entry — refreshable, and expirable the day a capped provider arrives. A scalar is a measurement, and it stays regardless.** `plan_stops.leg_distance_m` records that a truck was planned to travel 214.3 miles between two stops. That is a fact about your operation, in the same way `unit_price_usd` is — which is precisely why `plan_stops` stores the price as a literal number alongside the `station_price_id` foreign key rather than relying on a join.
 
-- `routes.expires_at = computed_at + interval '30 days'`, **set by a trigger so it cannot be forgotten.** The trigger does not discriminate by provider: ORS rows expire on the same schedule even though ODbL would permit keeping them — partly so adopting HERE later needs no schema change, and partly because a routing result older than 30 days is stale for planning regardless of its licence.
-- A daily job nulls `line`, `polyline`, `legs` and any raw provider payload on expired rows. **The row itself stays** — `origin_geom`, `destination_geom`, `truck_profile_id`, `distance_m` and `duration_s` survive, so geometry can be re-fetched later without asking the dispatcher to re-enter anything.
-- Plans older than 30 days still render their table but return `"geometryExpired": true` instead of a broken polyline. Nothing is recomputed and no provider call is made just to display one.
-- Re-fetching expired geometry is one `route()` call. It writes to `routes` only — **never** to `plans` or `plan_stops`. The re-fetched line reflects *today's* road network, which may differ from the route as it stood when planned, so the stored totals remain authoritative and the fresh line is shown as an approximate shape. Silently overwriting `plans.total_distance_m` with the new figure would corrupt the historical record.
-- An expired row keeps its `UNIQUE (provider, request_hash)`, so the adapter upserts and refreshes `computed_at` rather than inserting a duplicate. The trigger is declared `BEFORE INSERT OR UPDATE OF computed_at` precisely so that refresh extends the window.
+**Implementation in v1:**
+
+- `routes` carries **no `expires_at` column and no expiry trigger.** Nothing deletes or nulls route geometry.
+- `line`, `polyline` and `legs` stay **nullable** even so. A provider may legitimately return no geometry, and adopting a capped provider later then needs a job rather than a schema change.
+- A route is refreshed through its `UNIQUE (provider, request_hash)` upsert, which updates `computed_at` rather than inserting a duplicate.
+- **A refreshed line still writes to `routes` only — never to `plans` or `plan_stops`.** This rule survives the removal of expiry and is the one to keep: the fresh line reflects *today's* road network, so the stored totals remain authoritative. Silently overwriting `plans.total_distance_m` with a new figure would corrupt the historical record.
 - **Re-optimising an old route against that day's prices is a different operation producing a new plan**, not a restoration. `station_prices.valid_on` is permanent and dated, so this is always possible; it is the backtesting work in §20.
-- Attribution for the routing provider and for OSM ships **in the API response** so the frontend cannot omit it. Under ORS that is "© openrouteservice.org (HeiGIT)" plus "© OpenStreetMap contributors (ODbL)", and ODbL makes it a licence condition rather than a courtesy.
+- Attribution for the routing provider and for OSM ships **in the API response** so the frontend cannot omit it. Under ORS that is "© openrouteservice.org (HeiGIT)" plus "© OpenStreetMap contributors (ODbL)", and ODbL makes it a licence condition rather than a courtesy. **Removing expiry does not soften this** — indefinite retention of ODbL data is permitted *because* it is attributed.
+
+**Reinstated the day a contractually capped provider is adopted** (HERE, Google) — the design below was worked out and is kept rather than rediscovered:
+
+- `routes.expires_at`, set by a `BEFORE INSERT OR UPDATE OF computed_at` trigger so the cap cannot be forgotten by application code, and declared that way so a refresh extends the window. Make it provider-aware: capped providers get `computed_at + interval '30 days'`, ORS gets `NULL`.
+- A daily job nulls `line`, `polyline`, `legs` and any raw provider payload on expired rows. **The row itself stays** — `origin_geom`, `destination_geom`, `truck_profile_id`, `distance_m` and `duration_s` survive, so geometry can be re-fetched without asking the dispatcher to re-enter anything.
+- Plans whose geometry has been nulled still render their table but return `"geometryExpired": true` instead of a broken polyline. Nothing is recomputed and no provider call is made just to display one.
 
 **This is why permanent station coordinates never come from provider geocoding.** Otherwise you would re-geocode 605 stations every 30 days forever, or be out of compliance.
 

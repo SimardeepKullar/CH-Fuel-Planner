@@ -216,6 +216,10 @@ CREATE INDEX station_prices_lookup ON station_prices (valid_on, product_type, st
 
 -- ─── Routes and plans ────────────────────────────────────────────────────
 
+-- ORS geometry is ODbL and carries no storage cap, so v1 keeps it indefinitely
+-- and there is no expiry column or trigger. Geometry stays nullable: adopting a
+-- contractually capped provider (HERE, Google) reintroduces expiry, and the
+-- retention job then needs somewhere to null it to. See §17.
 CREATE TABLE routes (
   id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   provider         text NOT NULL,
@@ -224,31 +228,16 @@ CREATE TABLE routes (
   destination_geom geography(Point,4326) NOT NULL,
   truck_profile_id uuid NOT NULL REFERENCES truck_profiles(id),
   via_hash         char(64),
-  line             geography(LineString,4326),   -- NULLABLE: expires, see §17
-  polyline         text,                         -- NULLABLE: expires
-  legs             jsonb,                        -- NULLABLE: expires
+  line             geography(LineString,4326),   -- NULLABLE: see §17
+  polyline         text,                         -- NULLABLE: see §17
+  legs             jsonb,                        -- NULLABLE: see §17
   distance_m       numeric(12,1) NOT NULL,       -- scalar: permanent
   duration_s       integer NOT NULL,             -- scalar: permanent
   computed_at      timestamptz NOT NULL DEFAULT now(),
-  expires_at       timestamptz NOT NULL,
   UNIQUE (provider, request_hash)
 );
 
 CREATE INDEX routes_line_gix ON routes USING GIST (line);
-CREATE INDEX routes_expiry   ON routes (expires_at);
-
--- expires_at is set by a trigger, never by application code, so the 30-day
--- retention cap cannot be forgotten. See §17.
-CREATE OR REPLACE FUNCTION set_route_expiry() RETURNS trigger AS $$
-BEGIN
-  NEW.expires_at := COALESCE(NEW.computed_at, now()) + interval '30 days';
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE TRIGGER routes_set_expiry
-  BEFORE INSERT OR UPDATE OF computed_at ON routes
-  FOR EACH ROW EXECUTE FUNCTION set_route_expiry();
 
 CREATE TABLE plans (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
