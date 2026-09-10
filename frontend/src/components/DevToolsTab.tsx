@@ -1,8 +1,12 @@
-import Corners from "./Corners.jsx";
+import Corners from "./Corners";
+
+interface DevToolsTabProps {
+  truck: string;
+}
 
 // Every field here is an uncontrolled placeholder. Nothing is persisted and
-// "Apply & re-solve" is inert until the solver endpoint exists.
-export default function DevToolsTab({ truck }) {
+// "Apply & re-solve" is inert until the solver endpoint exists (T-21).
+export default function DevToolsTab({ truck }: DevToolsTabProps) {
   return (
     <section className="dev-grid">
       <div className="panel-card blueprint dev-card">
@@ -18,17 +22,17 @@ export default function DevToolsTab({ truck }) {
           </div>
           <div className="field">
             <label>Tank capacity (gal)</label>
-            <input className="input" defaultValue="120" />
+            <input className="input" defaultValue="200" />
           </div>
           <div className="field">
             <label>Fuel economy (mpg)</label>
-            <input className="input" defaultValue="7.1" />
+            <input className="input" defaultValue="7.5" />
           </div>
         </div>
         <div className="dev-fields">
           <div className="field">
             <label>Starting fuel (gal)</label>
-            <input className="input" defaultValue="62" />
+            <input className="input" defaultValue="104" />
           </div>
           <div className="field">
             <label>Starting fuel (%)</label>
@@ -36,7 +40,7 @@ export default function DevToolsTab({ truck }) {
           </div>
         </div>
         <div className="dev-foot">
-          <span>Range on hand ≈ 440 mi</span>
+          <span>Range on hand ≈ 780 mi</span>
           <span>Trip needs 68 gal</span>
         </div>
       </div>
@@ -47,11 +51,11 @@ export default function DevToolsTab({ truck }) {
         <div className="dev-fields">
           <div className="field">
             <label>Price feed</label>
-            <input className="input" defaultValue="opis-live · v3" />
+            <input className="input" defaultValue="BVD · ULSD CSV import" />
           </div>
           <div className="field">
             <label>Routing engine</label>
-            <input className="input" defaultValue="osrm-truck · hgv" />
+            <input className="input" defaultValue="openrouteservice · driving-hgv" />
           </div>
           <div className="field">
             <label>Price cache TTL (min)</label>
@@ -116,7 +120,7 @@ export default function DevToolsTab({ truck }) {
           </div>
           <div className="field">
             <label>Min leg between fills (mi)</label>
-            <input className="input" defaultValue="350" />
+            <input className="input" defaultValue="300" />
             <div className="dev-hint">Soft — relaxed automatically if the lane needs it.</div>
           </div>
           <div className="field">

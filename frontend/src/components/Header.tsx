@@ -1,8 +1,19 @@
-const TABS = [
+export type TabKey = "plan" | "recent" | "dev";
+
+const TABS: { key: TabKey; label: string }[] = [
   { key: "plan", label: "Plan" },
   { key: "recent", label: "Recent" },
   { key: "dev", label: "Dev Tools" },
 ];
+
+interface HeaderProps {
+  activeTab: TabKey;
+  onTabChange: (tab: TabKey) => void;
+  trucks: string[];
+  truck: string;
+  onTruckChange: (truck: string) => void;
+  planId: string;
+}
 
 export default function Header({
   activeTab,
@@ -10,8 +21,8 @@ export default function Header({
   trucks,
   truck,
   onTruckChange,
-  tripId,
-}) {
+  planId,
+}: HeaderProps) {
   return (
     <>
       <header className="topbar">
@@ -30,7 +41,7 @@ export default function Header({
           </button>
         ))}
 
-        {/* Placeholder identity — no auth wired up yet. */}
+        {/* Placeholder identity — no auth wired up yet (T-05). */}
         <div className="user-chip">
           <div className="user-chip-id">
             <span className="user-chip-name">M. Hodson</span>
@@ -55,7 +66,7 @@ export default function Header({
             ))}
           </select>
           <span className="tag tag-neutral">Diesel</span>
-          <span className="tag tag-accent trip-tag">{tripId}</span>
+          <span className="tag tag-accent trip-tag">{planId}</span>
         </div>
       </div>
     </>

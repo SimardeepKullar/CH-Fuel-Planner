@@ -34,6 +34,9 @@ const candidate: CandidateStation = {
 
 const completed: PlanResponse = {
   planId: "33333333-3333-3333-3333-333333333333",
+  createdAt: "2026-08-22T12:00:00.000Z",
+  origin: { label: "Chicago, IL", location: { lat: 41.8508, lng: -87.65 } },
+  destination: { label: "Dallas, TX", location: { lat: 32.7157, lng: -96.7969 } },
   status: "completed",
   units: "imperial",
   priceAsOf: "2026-08-22",
@@ -50,7 +53,6 @@ const completed: PlanResponse = {
     polyline: "BG3ab",
     distanceMiles: 981.2,
     durationSeconds: 55020,
-    estimatedFuelCostUsd: 792.14,
     totalFuelCostUsd: 792.14,
     totalGallons: 163.5,
     savingsVsBaselineUsd: 71.06,
@@ -100,6 +102,9 @@ const completed: PlanResponse = {
 
 const infeasible: PlanResponse = {
   planId: "55555555-5555-5555-5555-555555555555",
+  createdAt: "2026-08-22T12:00:00.000Z",
+  origin: { label: "Chicago, IL", location: { lat: 41.8508, lng: -87.65 } },
+  destination: { label: "Dallas, TX", location: { lat: 32.7157, lng: -96.7969 } },
   status: "infeasible",
   reason: {
     code: "LEG_GAP",

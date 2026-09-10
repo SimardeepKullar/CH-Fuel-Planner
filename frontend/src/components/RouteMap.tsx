@@ -1,10 +1,28 @@
 import { useState } from "react";
-import Corners from "./Corners.jsx";
+import type { PlanStop } from "@ch/core/domain/planResponse";
+import type { PlaceholderStation } from "../data/trips";
+import {
+  formatCurrency,
+  formatDistanceMiles,
+  formatGallons,
+  formatPricePerGallon,
+} from "../lib/format";
+import Corners from "./Corners";
 
-// Placeholder geometry. The real map will position pins from lat/lon; until
-// then every pin is laid out along the same drawn diagonal so the panel reads
-// correctly with any number of stops.
-function pinPos(index) {
+interface RouteMapProps {
+  stops: PlanStop[];
+  sheetStations: PlaceholderStation[];
+  showAllStations: boolean;
+}
+
+type Hover =
+  | { kind: "stop"; left: string; top: string; flip: boolean; stop: PlanStop }
+  | { kind: "candidate"; left: string; top: string; flip: boolean; station: PlaceholderStation };
+
+// Placeholder geometry. The real map (T-22, MapLibre) positions pins from
+// lat/lng; until then every numbered stop is laid out along the same drawn
+// diagonal so the panel reads correctly with any number of stops.
+function pinPos(index: number) {
   const t = 0.2 + index * 0.16;
   return {
     x: (12 + 74 * t).toFixed(1) + "%",
@@ -14,8 +32,8 @@ function pinPos(index) {
   };
 }
 
-export default function RouteMap({ stops, sheetStations, showAllStations }) {
-  const [hover, setHover] = useState(null);
+export default function RouteMap({ stops, sheetStations, showAllStations }: RouteMapProps) {
+  const [hover, setHover] = useState<Hover | null>(null);
 
   const clear = () => setHover(null);
 
@@ -31,7 +49,7 @@ export default function RouteMap({ stops, sheetStations, showAllStations }) {
         const p = pinPos(i);
         return (
           <div
-            key={s.rank}
+            key={s.seq}
             className="pin-stop"
             style={{ left: p.x, top: p.y }}
             onMouseEnter={() =>
@@ -39,7 +57,7 @@ export default function RouteMap({ stops, sheetStations, showAllStations }) {
             }
             onMouseLeave={clear}
           >
-            {s.rank}
+            {s.seq}
           </div>
         );
       })}
@@ -49,13 +67,13 @@ export default function RouteMap({ stops, sheetStations, showAllStations }) {
           <div
             key={c.name}
             className="pin-candidate"
-            style={{ left: c.x, top: c.y }}
+            style={{ left: `${c.x}%`, top: `${c.y}%` }}
             onMouseEnter={() =>
               setHover({
                 kind: "candidate",
-                left: c.x,
-                top: `calc(${c.y} - 96px)`,
-                flip: parseFloat(c.x) > 52,
+                left: `${c.x}%`,
+                top: `calc(${c.y}% - 96px)`,
+                flip: c.x > 52,
                 station: c,
               })
             }
@@ -73,22 +91,24 @@ export default function RouteMap({ stops, sheetStations, showAllStations }) {
           }}
         >
           <div className="map-tip-title">
-            {hover.stop.rank}. {hover.stop.station.toUpperCase()}
+            {hover.stop.seq}. {hover.stop.station.name.toUpperCase()}
           </div>
-          <div className="map-tip-place">{hover.stop.place}</div>
+          <div className="map-tip-place">
+            {hover.stop.station.city}, {hover.stop.station.state}
+          </div>
           <dl className="map-tip-rows">
             <dt>Price</dt>
-            <dd>{hover.stop.price}/gal</dd>
+            <dd>{formatPricePerGallon(hover.stop.unitPriceUsd, 2)}/gal</dd>
             <dt>Buy</dt>
-            <dd>{hover.stop.buy}</dd>
+            <dd>{formatGallons(hover.stop.purchaseGallons)}</dd>
             <dt>Arrive with</dt>
-            <dd>{hover.stop.arrive}</dd>
+            <dd>{formatGallons(hover.stop.arrivalGallons)}</dd>
             <dt>Detour</dt>
-            <dd>{hover.stop.detour}</dd>
+            <dd>{formatDistanceMiles(hover.stop.detourMiles)}</dd>
             <dt>Cumulative</dt>
-            <dd>{hover.stop.cumulative}</dd>
+            <dd>{formatDistanceMiles(hover.stop.cumulativeDistanceMiles)}</dd>
             <dt>Stop cost</dt>
-            <dd>{hover.stop.stopCost}</dd>
+            <dd>{formatCurrency(hover.stop.stopCostUsd)}</dd>
           </dl>
         </div>
       )}
@@ -106,9 +126,9 @@ export default function RouteMap({ stops, sheetStations, showAllStations }) {
           <div className="map-tip-place">{hover.station.place}</div>
           <dl className="map-tip-rows">
             <dt>Price</dt>
-            <dd>${hover.station.price}/gal</dd>
+            <dd>{formatPricePerGallon(hover.station.price)}/gal</dd>
             <dt>Along route</dt>
-            <dd>{hover.station.alongMi} mi</dd>
+            <dd>{formatDistanceMiles(hover.station.alongMi)}</dd>
           </dl>
           <div className="map-tip-note">Not selected by the optimiser.</div>
         </div>

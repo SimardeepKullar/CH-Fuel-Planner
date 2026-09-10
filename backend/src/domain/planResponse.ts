@@ -67,15 +67,20 @@ export interface RouteBounds {
   west: number;
 }
 
-export interface RouteSummary {
+interface RouteGeometrySummary {
   polyline: string | null;
   distanceMiles: number;
   durationSeconds: number;
-  estimatedFuelCostUsd: number;
   bounds: RouteBounds;
 }
 
-export interface OptimizedRouteSummary extends RouteSummary {
+/** The baseline (direct, unoptimized) route. */
+export interface RouteSummary extends RouteGeometrySummary {
+  estimatedFuelCostUsd: number;
+}
+
+/** The solved route — supersedes `estimatedFuelCostUsd` with a real total. */
+export interface OptimizedRouteSummary extends RouteGeometrySummary {
   totalFuelCostUsd: number;
   totalGallons: number;
   savingsVsBaselineUsd: number;
@@ -159,8 +164,24 @@ export interface InfeasibleReason {
   suggestions: InfeasibleSuggestion[];
 }
 
+/**
+ * A geocoded endpoint, echoed back so the lane form shows what was actually
+ * resolved rather than what was typed (UI contract §3.1, §3.4). §14's sample
+ * payload doesn't yet carry this — UI contract §3.1 names it as a gap for
+ * T-18 to close; it's added here so the Plan tab's Source/Destination fields
+ * have something typed to render against in the meantime.
+ */
+export interface ResolvedLocation {
+  label: string;
+  location: LatLng;
+}
+
 interface PlanResponseBase {
   planId: string;
+  /** `plans.created_at` — omitted from §14's illustrative sample, not a gap. */
+  createdAt: string;
+  origin: ResolvedLocation;
+  destination: ResolvedLocation;
   /** Corridor stations not selected — the map's dot layer. */
   candidateStations: CandidateStation[];
 }
