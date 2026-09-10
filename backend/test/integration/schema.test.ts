@@ -182,4 +182,163 @@ describe.skipIf(!hasDatabase)("0001_init.sql (integration)", () => {
     await expect(insertPrice()).resolves.toBeTruthy();
     await expect(insertPrice()).rejects.toThrow();
   });
+
+  async function insertTruckProfile(slug: string): Promise<string> {
+    const { rows } = await scopedPool.query<{ id: string }>(
+      `INSERT INTO truck_profiles (slug, display_name, tank_gallons, avg_mpg)
+       VALUES ($1, $1, 200, 7.0)
+       RETURNING id`,
+      [slug],
+    );
+    const id = rows[0]?.id;
+    if (!id) throw new Error("insertTruckProfile failed");
+    return id;
+  }
+
+  async function insertRoute(
+    truckProfileId: string,
+    requestHash: string,
+    computedAt?: string,
+  ): Promise<{ id: string; computed_at: Date; expires_at: Date }> {
+    const { rows } = await scopedPool.query<{
+      id: string;
+      computed_at: Date;
+      expires_at: Date;
+    }>(
+      `INSERT INTO routes
+         (provider, request_hash, origin_geom, destination_geom, truck_profile_id,
+          distance_m, duration_s${computedAt ? ", computed_at" : ""})
+       VALUES ('ors', $1, ST_SetSRID(ST_MakePoint(-111, 32), 4326)::geography,
+               ST_SetSRID(ST_MakePoint(-112, 33), 4326)::geography, $2, 1000, 3600
+               ${computedAt ? ", $3" : ""})
+       RETURNING id, computed_at, expires_at`,
+      computedAt ? [requestHash, truckProfileId, computedAt] : [requestHash, truckProfileId],
+    );
+    const row = rows[0];
+    if (!row) throw new Error("insertRoute failed");
+    return row;
+  }
+
+  async function insertPlan(
+    baseRouteId: string,
+    truckProfileId: string,
+    status: string = "completed",
+  ): Promise<string> {
+    const { rows } = await scopedPool.query<{ id: string }>(
+      `INSERT INTO plans
+         (base_route_id, truck_profile_id, start_fuel_gallons, min_arrival_gallons,
+          max_leg_miles, min_leg_miles, max_detour_miles, status)
+       VALUES ($1, $2, 200, 30, 500, 300, 10, $3)
+       RETURNING id`,
+      [baseRouteId, truckProfileId, status],
+    );
+    const id = rows[0]?.id;
+    if (!id) throw new Error("insertPlan failed");
+    return id;
+  }
+
+  it("sets expires_at = computed_at + 30 days without the caller supplying it", async () => {
+    const truckProfileId = await insertTruckProfile("route-truck-1");
+    const route = await insertRoute(truckProfileId, "h".repeat(64));
+    const { rows } = await scopedPool.query<{ diff_days: string }>(
+      `SELECT extract(epoch FROM ($1::timestamptz - $2::timestamptz)) / 86400 AS diff_days`,
+      [route.expires_at, route.computed_at],
+    );
+    expect(Number(rows[0]?.diff_days)).toBeCloseTo(30, 5);
+  });
+
+  it("extends expires_at when computed_at is updated, but not on an unrelated column update", async () => {
+    const truckProfileId = await insertTruckProfile("route-truck-2");
+    const route = await insertRoute(truckProfileId, "i".repeat(64));
+
+    const newComputedAt = "2026-06-01T00:00:00Z";
+    await scopedPool.query(`UPDATE routes SET computed_at = $1 WHERE id = $2`, [
+      newComputedAt,
+      route.id,
+    ]);
+    const { rows: afterComputedAtUpdate } = await scopedPool.query<{
+      expires_at: Date;
+    }>(`SELECT expires_at FROM routes WHERE id = $1`, [route.id]);
+    const { rows: diffRows } = await scopedPool.query<{ diff_days: string }>(
+      `SELECT extract(epoch FROM ($1::timestamptz - $2::timestamptz)) / 86400 AS diff_days`,
+      [afterComputedAtUpdate[0]?.expires_at, newComputedAt],
+    );
+    expect(Number(diffRows[0]?.diff_days)).toBeCloseTo(30, 5);
+
+    await scopedPool.query(`UPDATE routes SET distance_m = 9999 WHERE id = $1`, [
+      route.id,
+    ]);
+    const { rows: afterUnrelatedUpdate } = await scopedPool.query<{
+      expires_at: Date;
+    }>(`SELECT expires_at FROM routes WHERE id = $1`, [route.id]);
+    expect(afterUnrelatedUpdate[0]?.expires_at.getTime()).toBe(
+      afterComputedAtUpdate[0]?.expires_at.getTime(),
+    );
+  });
+
+  it("nulls line, polyline and legs on an existing route", async () => {
+    const truckProfileId = await insertTruckProfile("route-truck-3");
+    const route = await insertRoute(truckProfileId, "j".repeat(64));
+    await scopedPool.query(
+      `UPDATE routes SET line = NULL, polyline = NULL, legs = NULL WHERE id = $1`,
+      [route.id],
+    );
+    const { rows } = await scopedPool.query<{
+      line: string | null;
+      polyline: string | null;
+      legs: string | null;
+    }>(`SELECT line, polyline, legs FROM routes WHERE id = $1`, [route.id]);
+    expect(rows[0]).toEqual({ line: null, polyline: null, legs: null });
+  });
+
+  it("rejects plans.status = 'pending'", async () => {
+    const truckProfileId = await insertTruckProfile("route-truck-4");
+    const route = await insertRoute(truckProfileId, "k".repeat(64));
+    await expect(insertPlan(route.id, truckProfileId, "pending")).rejects.toThrow();
+  });
+
+  it("rejects a duplicate (plan_id, seq) in plan_stops", async () => {
+    const truckProfileId = await insertTruckProfile("route-truck-5");
+    const route = await insertRoute(truckProfileId, "l".repeat(64));
+    const planId = await insertPlan(route.id, truckProfileId);
+    const stationId = await insertStation("BVD", "9206810");
+
+    const insertStop = () =>
+      scopedPool.query(
+        `INSERT INTO plan_stops
+           (plan_id, seq, station_id, offset_along_route_m, leg_distance_m,
+            arrival_gallons, purchase_gallons, departure_gallons, unit_price_usd,
+            stop_cost_usd, cum_distance_m, cum_duration_s)
+         VALUES ($1, 1, $2, 10000, 10000, 50, 100, 150, 3.10, 310, 10000, 600)`,
+        [planId, stationId],
+      );
+    await expect(insertStop()).resolves.toBeTruthy();
+    await expect(insertStop()).rejects.toThrow();
+  });
+
+  it("cascades plan deletion to plan_stops, but refuses to delete a station referenced by a stop", async () => {
+    const truckProfileId = await insertTruckProfile("route-truck-6");
+    const route = await insertRoute(truckProfileId, "m".repeat(64));
+    const planId = await insertPlan(route.id, truckProfileId);
+    const stationId = await insertStation("BVD", "9206810");
+    await scopedPool.query(
+      `INSERT INTO plan_stops
+         (plan_id, seq, station_id, offset_along_route_m, leg_distance_m,
+          arrival_gallons, purchase_gallons, departure_gallons, unit_price_usd,
+          stop_cost_usd, cum_distance_m, cum_duration_s)
+       VALUES ($1, 1, $2, 10000, 10000, 50, 100, 150, 3.10, 310, 10000, 600)`,
+      [planId, stationId],
+    );
+
+    await expect(
+      scopedPool.query(`DELETE FROM stations WHERE id = $1`, [stationId]),
+    ).rejects.toThrow();
+
+    await scopedPool.query(`DELETE FROM plans WHERE id = $1`, [planId]);
+    const { rows } = await scopedPool.query<{ count: string }>(
+      `SELECT count(*) FROM plan_stops WHERE plan_id = $1`,
+      [planId],
+    );
+    expect(rows[0]?.count).toBe("0");
+  });
 });

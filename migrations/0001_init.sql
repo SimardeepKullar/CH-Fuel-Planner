@@ -213,3 +213,124 @@ CREATE TABLE station_prices (
 );
 
 CREATE INDEX station_prices_lookup ON station_prices (valid_on, product_type, station_id);
+
+-- ─── Routes and plans ────────────────────────────────────────────────────
+
+CREATE TABLE routes (
+  id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  provider         text NOT NULL,
+  request_hash     char(64) NOT NULL,
+  origin_geom      geography(Point,4326) NOT NULL,
+  destination_geom geography(Point,4326) NOT NULL,
+  truck_profile_id uuid NOT NULL REFERENCES truck_profiles(id),
+  via_hash         char(64),
+  line             geography(LineString,4326),   -- NULLABLE: expires, see §17
+  polyline         text,                         -- NULLABLE: expires
+  legs             jsonb,                        -- NULLABLE: expires
+  distance_m       numeric(12,1) NOT NULL,       -- scalar: permanent
+  duration_s       integer NOT NULL,             -- scalar: permanent
+  computed_at      timestamptz NOT NULL DEFAULT now(),
+  expires_at       timestamptz NOT NULL,
+  UNIQUE (provider, request_hash)
+);
+
+CREATE INDEX routes_line_gix ON routes USING GIST (line);
+CREATE INDEX routes_expiry   ON routes (expires_at);
+
+-- expires_at is set by a trigger, never by application code, so the 30-day
+-- retention cap cannot be forgotten. See §17.
+CREATE OR REPLACE FUNCTION set_route_expiry() RETURNS trigger AS $$
+BEGIN
+  NEW.expires_at := COALESCE(NEW.computed_at, now()) + interval '30 days';
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER routes_set_expiry
+  BEFORE INSERT OR UPDATE OF computed_at ON routes
+  FOR EACH ROW EXECUTE FUNCTION set_route_expiry();
+
+CREATE TABLE plans (
+  id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  created_by           uuid REFERENCES users(id),
+  base_route_id        uuid NOT NULL REFERENCES routes(id),
+  optimized_route_id   uuid REFERENCES routes(id),
+  truck_profile_id     uuid NOT NULL REFERENCES truck_profiles(id),
+
+  optimizer_strategy   text NOT NULL DEFAULT 'dp_v1',
+  price_basis          text NOT NULL DEFAULT 'pump'
+                         CHECK (price_basis IN ('pump','ifta_net','total_cost')),
+  start_fuel_gallons   numeric(6,1) NOT NULL,
+  min_arrival_gallons  numeric(6,1) NOT NULL,
+  max_leg_miles        numeric(6,1) NOT NULL,
+  min_leg_miles        numeric(6,1) NOT NULL,
+  min_leg_relaxed      boolean      NOT NULL DEFAULT false,   -- §5.1 two-pass fallback
+  max_detour_miles     numeric(5,1) NOT NULL,
+  driver_cost_per_hour numeric(7,2) NOT NULL DEFAULT 0,
+  fixed_stop_minutes   integer      NOT NULL DEFAULT 20,
+  max_stops            smallint,
+
+  status               text NOT NULL
+                         CHECK (status IN ('completed','infeasible')),
+  infeasible_reason    text,
+
+  total_fuel_cost_usd  numeric(10,2),
+  total_gallons        numeric(8,2),
+  total_distance_m     numeric(12,1),
+  total_duration_s     integer,
+  baseline_cost_usd    numeric(10,2),
+  price_as_of          date,
+  google_maps_url      text,
+  disclaimers          jsonb NOT NULL DEFAULT '[]'::jsonb,
+
+  created_at           timestamptz NOT NULL DEFAULT now(),
+  completed_at         timestamptz,
+  dispatched_at        timestamptz   -- set when a human actually sends this plan to a driver; NULL = computed only
+);
+
+CREATE TABLE plan_stops (
+  id                   bigserial PRIMARY KEY,
+  plan_id              uuid NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+  seq                  smallint NOT NULL,
+  stop_type            text NOT NULL DEFAULT 'fuel'
+                         CHECK (stop_type IN ('fuel','rest','delivery')),
+  station_id           uuid   REFERENCES stations(id),
+  station_price_id     bigint REFERENCES station_prices(id),
+
+  offset_along_route_m numeric(12,1) NOT NULL,
+  leg_distance_m       numeric(12,1) NOT NULL,   -- from the previous fill
+  detour_distance_m    numeric(10,1) NOT NULL DEFAULT 0,
+  detour_duration_s    integer      NOT NULL DEFAULT 0,
+
+  arrival_gallons      numeric(6,2) NOT NULL,
+  purchase_gallons     numeric(6,2) NOT NULL,
+  departure_gallons    numeric(6,2) NOT NULL,
+  unit_price_usd       numeric(8,4) NOT NULL,    -- literal, not a join. See §17.
+  stop_cost_usd        numeric(9,2) NOT NULL,
+
+  cum_distance_m       numeric(12,1) NOT NULL,
+  cum_duration_s       integer      NOT NULL,
+
+  UNIQUE (plan_id, seq)
+);
+
+-- ─── Provider metering (§8.3) ────────────────────────────────────────────
+
+CREATE TABLE provider_usage (        -- ours: a monthly spend ceiling
+  provider   text NOT NULL,
+  period     date NOT NULL,
+  endpoint   text NOT NULL,
+  call_count integer NOT NULL DEFAULT 0,
+  PRIMARY KEY (provider, period, endpoint)
+);
+
+CREATE TABLE provider_quota (        -- theirs: an observed rate limit, no stated window
+  provider     text NOT NULL,
+  endpoint     text NOT NULL,
+  limit_value  integer,
+  remaining    integer,
+  observed_at  timestamptz NOT NULL,
+  prev_remaining integer,
+  prev_observed_at timestamptz,
+  PRIMARY KEY (provider, endpoint)
+);
