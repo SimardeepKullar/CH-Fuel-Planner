@@ -160,7 +160,7 @@ The missing January day and the duplicate file are **correct behaviour to report
 
 ## Environment
 
-`.env` is gitignored and starts empty. Copy from `backend/.env.example`: `DATABASE_URL`, `ORS_API_KEY`, `ROUTING_PROVIDER=ors`, `AUTH_SECRET`, `SEED_USER_EMAIL`, `SEED_USER_PASSWORD`.
+`.env` is gitignored and starts empty. Copy from `backend/.env.example`: `DATABASE_URL`, `ORS_API_KEY`, `ROUTING_PROVIDER=ors`, `AUTH_SECRET`, `SEED_USER_EMAIL`, `SEED_USER_PASSWORD`, `SEED_USER_DISPLAY_NAME` (optional — defaults to `"Dispatcher"`).
 
 Local Postgres runs on **port 5433**, not 5432.
 

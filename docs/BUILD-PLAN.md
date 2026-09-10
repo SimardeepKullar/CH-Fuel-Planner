@@ -222,7 +222,7 @@ Note the direction of authority: the drift test checks code against the database
 
 **Files.** New: `migrations/0002_seed.sql`.
 
-**Logic.** The §16 table exactly: `volvo-vnl-300` (150 gal, 6.5 mpg), `volvo-vnl-760` (200, 7.5), `volvo-vnl-860` (250, 7.2). All three carry `reserve_fraction 0.15`, `max_leg_miles 500`, `min_leg_miles 300`. The 860 also carries the physical spec the router needs: 36,287 kg, 411 cm high, 259 cm wide, 2,250 cm long, 5 axles.
+**Logic.** The §16 table exactly: `volvo-vnl-300` (150 gal, 6.5 mpg), `volvo-vnl-760` (200, 7.5), `volvo-vnl-860` (250, 7.2). All three carry `reserve_fraction 0.15`, `max_leg_miles 500`, `min_leg_miles 300`, and a placeholder `truck_number` (022 / 056 / 091) — dispatchers identify a truck by fleet number, not model name, so the selector needs one from day one even before the real roster is known. The 860 also carries the physical spec the router needs: 36,287 kg, 411 cm high, 259 cm wide, 2,250 cm long, 5 axles.
 
 Product code: `('BVD','ULSD','highway_diesel','seed', now(), 'Confirmed from 2026-08-22 sheet')`. One row, and it is a **tripwire** rather than a lookup — its job is to fail an unmapped code, not to enrich a known one.
 
@@ -240,9 +240,9 @@ These MPG figures are sourced averages, not CH Logistics's fleet (§21 Q4). They
 
 **Files.** New: `scripts/load_gazetteer.py`, `scripts/requirements.txt`.
 
-**Logic.** Places plus county subdivisions, uncertainty `r = sqrt(ALAND_SQMI / π)`. Python is explicitly permitted here by §7.1: one-time analysis whose deliverable is rows in a table, not code. It lives in `scripts/`, is run by hand, and **is never imported by application code**.
+**Logic.** Places plus county subdivisions, restricted to the 50 states plus DC (§4.4 — US-only; also sidesteps a mojibake encoding issue in Puerto Rico's rows in the 2024 source file). Uncertainty `r = sqrt(ALAND_SQMI / π)`, converted from miles to meters (`× 1609.344`) before storage — every other `_m` column in the schema is meters. Places carry an LSAD code naming their legal/statistical suffix exactly, so it is looked up, not guessed from text; County Subdivisions have no such code, so their suffix is matched against a documented vocabulary and left as-is when nothing matches. On a `(state, name)` clash, Places win. Python is explicitly permitted here by §7.1: one-time analysis whose deliverable is rows in a table, not code. It lives in `scripts/`, is run by hand, and **is never imported by application code**.
 
-Name normalisation must match `cityNormalize.ts` from T-09 — same case folding, same prefix expansion — or the join silently misses. Building them apart and asserting agreement is the point of the shared test in step 9.1.
+Name normalisation (post-suffix-stripping) must match `cityNormalize.ts` from T-09 — same case folding, same prefix expansion — or the join silently misses. Census names already arrive in the target convention ("McCalla", "Mount Vernon", "St. Augustine"); T-09 has to reproduce that convention from BVD's ALL-CAPS `city_raw`. Building them apart and asserting agreement is the point of the shared test in step 9.1.
 
 **Tests.**
 - All 50 states plus DC present.
@@ -255,9 +255,9 @@ Name normalisation must match `cityNormalize.ts` from T-09 — same case folding
 
 **Goal.** One user who can sign in at T-05.
 
-**Files.** New: `backend/src/cli/seed.ts`. Modified: root `package.json` — add `seed`.
+**Files.** New: `backend/src/cli/seed.ts`, `backend/src/domain/password.ts` (`hashPassword`/`verifyPassword`, scrypt via Node's built-in `crypto` — no new dependency). Modified: root `package.json` and `backend/package.json` — add `seed`.
 
-**Logic.** Reads `SEED_USER_EMAIL` and `SEED_USER_PASSWORD`, hashes with the same function `authorize()` verifies in T-05, inserts with `role = 'dispatcher'` and a `display_name`. **Refuses to overwrite an existing user** — a seed script that silently resets a password is a foot-gun.
+**Logic.** Reads `SEED_USER_EMAIL` and `SEED_USER_PASSWORD` (required) and `SEED_USER_DISPLAY_NAME` (optional, defaults to `"Dispatcher"`), hashes the password with `hashPassword()` — the same function `authorize()` verifies against in T-05 via `verifyPassword()` — inserts with `role = 'dispatcher'`. **Refuses to overwrite an existing user** — a seed script that silently resets a password is a foot-gun. Env is validated before any database call, so a missing var never reaches an insert.
 
 **Tests.**
 - Creates one user with a hash that is not the plaintext.
@@ -349,7 +349,7 @@ Two rules from UI contract §1 are encoded here: everything is a **number, not a
 
 **Files.** New: `frontend/src/auth.ts`, `frontend/src/app/api/auth/[...nextauth]/route.ts`, `backend/src/catalog/users.ts`.
 
-**Logic.** Credentials provider with **JWT sessions** (D7). JWT avoids the `accounts`/`sessions`/`verification_tokens` tables that database sessions would require — disproportionate for a single account. `authorize()` looks the user up by email and verifies against `users.password_hash` from step 3.3.
+**Logic.** Credentials provider with **JWT sessions** (D7). JWT avoids the `accounts`/`sessions`/`verification_tokens` tables that database sessions would require — disproportionate for a single account. `authorize()` looks the user up by email and verifies against `users.password_hash` from step 3.3, using `verifyPassword()` from `backend/src/domain/password.ts` — built in T-03 for `seed.ts`'s `hashPassword()`, and reused here rather than duplicated.
 
 **Tests.**
 - Correct credentials return a session carrying `displayName` and `role`.
