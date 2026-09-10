@@ -25,6 +25,7 @@
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "db:migrate": "npm run db:migrate --workspace backend",
+    "seed": "npm run seed --workspace backend",
     "db:reset": "docker compose down -v && docker compose up -d --wait && npm run db:migrate",
     "db:logs": "docker compose logs -f db",
     "typecheck": "npm run typecheck --workspace backend",
