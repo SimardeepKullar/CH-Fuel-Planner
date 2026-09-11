@@ -7,7 +7,7 @@ import "../index.css";
 export const metadata: Metadata = {
   title: "CH Fleet · Route Fuel",
   icons: {
-    icon: "/favicon.svg",
+    icon: "/ch-logo-favi.png",
   },
 };
 

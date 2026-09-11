@@ -34,11 +34,7 @@ export default function Header({
   return (
     <>
       <header className="topbar">
-        <img
-          className="brand-logo"
-          src="https://www.chlogistics.ca/images/ch-logo-white.png"
-          alt="CH Logistics"
-        />
+        <img className="brand-logo" src="/ch-logo-white.png" alt="CH Logistics" />
         {TABS.map((tab) => (
           <button
             key={tab.key}

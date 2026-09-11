@@ -35,11 +35,7 @@ export default function SignInPage() {
   return (
     <div className="signin-page">
       <div className="signin-shell">
-        <img
-          className="signin-brand"
-          src="https://www.chlogistics.ca/images/ch-logo-white.png"
-          alt="CH Logistics"
-        />
+        <img className="signin-brand" src="/ch-logo-white.png" alt="CH Logistics" />
         <form className="signin-card" onSubmit={handleSubmit} noValidate>
           <h1 className="signin-title">Dispatch sign in</h1>
 
