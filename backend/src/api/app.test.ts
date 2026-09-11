@@ -27,4 +27,17 @@ describe("createApp", () => {
     expect(body.title).toBe("Not Found");
     expect(body.status).toBe(404);
   });
+
+  it("defaults to authRequired: true", () => {
+    const app = createApp();
+    expect(app.authRequired).toBe(true);
+  });
+
+  it("createApp({ authRequired: false }) serves API tests with no session", async () => {
+    const app = createApp({ authRequired: false });
+    expect(app.authRequired).toBe(false);
+
+    const response = await app.handle(new Request("http://localhost/api/v1/health"));
+    expect(response.status).toBe(200);
+  });
 });

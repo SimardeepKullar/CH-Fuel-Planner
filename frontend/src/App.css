@@ -557,6 +557,54 @@ select.input { width: 100%; }
 }
 .dev-actions .btn { height: 36px; }
 
+/* ===========================================================================
+   SIGN IN
+   =========================================================================== */
+
+.signin-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-accent-800);
+}
+.signin-shell {
+  width: 100%;
+  max-width: 360px;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+}
+.signin-brand { height: 30px; }
+.signin-card {
+  width: 100%;
+  background: var(--color-surface);
+  border-top: 3px solid var(--color-accent);
+  padding: 28px 26px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.signin-title {
+  font: 700 18px var(--font-heading);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-accent-800);
+}
+.signin-fields { display: flex; flex-direction: column; gap: 14px; }
+.signin-error {
+  margin: 0;
+  font: 400 12.5px var(--font-body);
+  color: #b3261e;
+  background: #fdecea;
+  border: 1px solid #f5c2c0;
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+}
+.signin-submit { width: 100%; }
+
 /* — narrow screens: the wireframe is a desktop dispatch tool, so this only
      keeps it usable rather than re-designing it — */
 @media (max-width: 1080px) {
