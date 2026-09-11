@@ -128,6 +128,7 @@ Neither document flags these. Each is fixed in the ticket named.
 | **T-02** | Rewrite the database schema | T-01 | 0 |
 | **T-03** | Seed reference data | T-02 | 0 |
 | **T-04** | Next.js + TypeScript migration | T-01 | 1 · Shell and access |
+| **T-04B** | Backend build step and package boundary | T-04 | 1 |
 | **T-05** | Auth and login page | T-03, T-04 | 1 |
 | **T-06** | Ingest service and `npm run ingest` | T-03 | 2 · Data in |
 | **T-07** | Backfill CLI and the January import | T-06 | 2 |
@@ -139,7 +140,7 @@ Neither document flags these. Each is fixed in the ticket named.
 | **T-13** | Validation loop and two-pass relaxation | T-11, T-12 | 3 |
 | **T-14** | Detour costing | T-13 | 3 |
 | **T-15** | Address geocoding and `saved_locations` | T-10 | 4 · API |
-| **T-16** | Plan orchestration, `POST /plans`, `GET /plans/{id}` | T-13, T-14, T-15 | 4 |
+| **T-16** | Plan orchestration, `POST /plans`, `GET /plans/{id}` | T-13, T-14, T-15, T-04B | 4 |
 | **T-17** | Google Maps URL and disclaimers | T-16 | 4 |
 | **T-18** | Supporting read endpoints | T-16 | 4 |
 | **T-19** | `sentToDriver` write path | T-18 | 4 |
@@ -333,6 +334,44 @@ Tests are co-located as `*.test.ts` beside the unit under test. Integration test
 - `trips.ts` type-checks as `PlanResponse[]`; no component reads a pre-formatted string.
 - `GET /api/v1/health` returns a stub through the mount.
 - Drift items 3–5 are gone.
+
+---
+
+## T-04B · Backend build step and package boundary
+
+**Priority 4.5.**
+
+**Goal.** `@ch/core` becomes a properly buildable package: `npm run build --workspace backend` emits `backend/dist/**/*.{js,d.ts}` from `backend/src`, exposed via a real `package.json` `exports` map. The Next mount point (T-04) stops reaching into `backend/src` directly and depends only on this compiled surface.
+
+**Why.** T-04 step 4.4 found that Turbopack cannot resolve backend's NodeNext-required `.js`-suffixed relative imports when bundling backend source directly — it has no equivalent of webpack's `resolve.extensionAlias`, the standard fix for this exact interop case. The interim fix landed in T-04 — `backend/src/api/app.ts` hand-builds its 404 body instead of importing `problemResponse` from `problem.ts`, and `frontend/tsconfig.json` carries a `paths` alias reaching straight into `backend/src` — does not scale to T-16, whose real route table pulls in much deeper chains (`planning/`, `optimizer/`, `routing/`, `catalog/`, ...). This ticket closes that gap before T-16 needs it to work, and removes both stopgaps.
+
+**The mechanism.** NodeNext requires `backend/src` to write `import "./foo.js"` *because that is the correct name of the compiled output* — once `tsc` actually emits, `foo.ts` becomes `dist/foo.js`, and the specifier is simply correct. No bundler cleverness or extension rewriting is needed; the mismatch only exists today because Turbopack is asked to resolve source-tree specifiers against a source tree that was never meant to be read literally.
+
+**Files — new**
+- `backend/tsconfig.build.json` — extends `tsconfig.json`; `noEmit: false`, `declaration: true`, `outDir: "dist"`, `rootDir: "./src"`, `include: ["src"]`, excludes `*.test.ts`.
+- `backend/.gitignore` — ignores `dist/`.
+
+**Files — modified**
+- `backend/package.json` — add `"build": "tsc -p tsconfig.build.json"`; add an `"exports"` map: `"."` and `"./*"`, each `{ "types": "./dist/.../*.d.ts", "default": "./dist/.../*.js" }`.
+- `backend/src/api/app.ts` — un-inline: restore `import { problemResponse } from "./problem.js"` for the 404 branch, remove the stopgap comment.
+- `frontend/tsconfig.json` — remove the `@ch/core/*` → `../backend/src/*` `paths` override; `@ch/core/*` now resolves through the real package.
+- `package.json` (root) — `"build"` becomes `npm run build --workspace backend && npm run build --workspace frontend`; `"predev"` also builds backend, so `npm run dev` always has fresh `dist/`; add `"pretypecheck": "npm run build --workspace backend"` so `npm run typecheck` — and therefore `verify`, and CI, unchanged — transparently keeps `dist` fresh with no separate CI step.
+
+**Files deliberately left alone.** `.github/workflows/ci.yml` — CI already runs `npm run verify`, and the `pretypecheck` hook makes that self-sufficient; no CI-specific step is needed.
+
+**The trade-off this introduces.** Frontend's typecheck and Turbopack bundling now depend on `backend/dist` being *rebuilt*, not just edited — a stale `dist/` after an unbuilt `backend/src` change is a real, if minor, footgun for local dev (CI never sees it, since `pretypecheck` always rebuilds first). This is the standard trade-off any monorepo with a "consume compiled output" convention carries, not a new risk unique to this repo.
+
+**Dependencies.** T-04.
+
+**Definition of done**
+- `npm run build --workspace backend` emits `dist/api/app.js`, `dist/api/problem.js`, `dist/domain/planResponse.js` (+ matching `.d.ts` files), with no `.test.js` output.
+- `backend/src/api/app.ts` imports `problemResponse` from `./problem.js` again — no inline duplication.
+- `frontend/tsconfig.json` has no `paths` override for `@ch/core`.
+- `npm run build` (root, clean checkout, no prior `backend/dist`) succeeds end to end.
+- `npm run typecheck` (root, clean checkout) succeeds with no manual pre-step.
+- T-04's own API tests (`GET /api/v1/health` → 200, unknown path → 404 `application/problem+json`) still pass unchanged, and the app still serves those correctly through `npm run dev`.
+- `npm run verify` is green from a clean checkout.
+- CI is green on the PR.
 
 ---
 
@@ -689,7 +728,7 @@ Tests are co-located as `*.test.ts` beside the unit under test. Integration test
 
 **Files — modified.** `docs/PROJECT-SCOPE.md` §14 and §15.1 — record the split.
 
-**Dependencies.** T-13, T-14, T-15.
+**Dependencies.** T-13, T-14, T-15, T-04B — the plan orchestration service and the routes that call it are the first code to pull `backend/src/planning`, `optimizer`, `routing` and `catalog` through the Next mount, exactly the deep import chain T-04B's package boundary exists for.
 
 **Definition of done**
 - A real lane returns a complete plan with stops, totals and `priceAsOf`.

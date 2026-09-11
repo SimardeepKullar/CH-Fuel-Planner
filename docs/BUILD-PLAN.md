@@ -341,6 +341,45 @@ Two rules from UI contract §1 are encoded here: everything is a **number, not a
 
 ---
 
+## T-04B · Backend build step and package boundary
+
+### Step 4B.1 — Compile `@ch/core` to a real package
+
+**Goal.** `npm run build --workspace backend` emits real, importable JS.
+
+**Files.** New: `backend/tsconfig.build.json`, `backend/.gitignore`. Modified: `backend/package.json` — add `"build": "tsc -p tsconfig.build.json"` and an `"exports"` map.
+
+**Logic.** `tsconfig.build.json` extends the base config with `noEmit: false`, `declaration: true`, `outDir: "dist"`, `rootDir: "./src"`, `include: ["src"]`, and excludes `*.test.ts` — the same NodeNext settings, just actually emitting. Because backend's source already writes `import "./foo.js"` for `foo.ts` (NodeNext's whole premise), the compiled output needs no extension rewriting at all: `foo.ts` → `dist/foo.js`, and the specifier is already correct.
+
+The `exports` map (`"."` and `"./*"`, each mapping `types` to the matching `.d.ts` and `default` to the matching `.js` under `dist/`) is what turns `@ch/core` from "a source tree a neighbour happens to reach into" into an actual package boundary: any consumer — Turbopack, `tsc`, plain Node — resolves `@ch/core/api/app` to `dist/api/app.js` through ordinary package resolution, no bundler-specific configuration required.
+
+**Tests.**
+- `npm run build --workspace backend` against a clean checkout (no prior `dist/`) exits 0.
+- `dist/api/app.js`, `dist/api/problem.js`, `dist/domain/planResponse.js` exist, each with a matching `.d.ts`.
+- No `*.test.js` appears anywhere under `dist/`.
+- `dist/` is untracked (`git status` clean after a build).
+- **Pass:** all four.
+
+### Step 4B.2 — Remove both T-04 stopgaps and wire the scripts
+
+**Goal.** The real package boundary replaces the interim workarounds everywhere they were needed.
+
+**Files.** Modified: `backend/src/api/app.ts` (restore `import { problemResponse } from "./problem.js"`, drop the stopgap comment), `frontend/tsconfig.json` (remove the `@ch/core/*` → `../backend/src/*` `paths` override), `package.json` (root) — `"build"` becomes `npm run build --workspace backend && npm run build --workspace frontend`; `"predev"` also builds backend; add `"pretypecheck": "npm run build --workspace backend"`.
+
+**Logic.** The `pretypecheck` script is an npm lifecycle hook — `npm run typecheck` runs it automatically before the `typecheck` script body, with no change to `typecheck` itself and no separate CI step. Since `verify` is `typecheck && lint && test`, this alone keeps `dist/` fresh for every path that matters (a developer's `npm run verify`, and CI's identical invocation) without CI-specific plumbing.
+
+**Tests.**
+- `backend/src/api/app.ts` has exactly one import statement, from `./problem.js`; the hand-built 404 body from T-04 is gone.
+- `frontend/tsconfig.json` has no `paths` key.
+- `npm run typecheck` (root, clean checkout, `backend/dist` absent) exits 0 with no manual pre-step — proving the hook actually ran.
+- `npm run build` (root, clean checkout) exits 0 end to end (backend, then frontend).
+- `npm run dev`, then `GET /api/v1/health` → 200 and `GET /api/v1/nope` → 404 `application/problem+json` — T-04's two mount behaviours, unchanged from the consumer's point of view.
+- Backend's existing `src/api/app.test.ts` and `src/api/problem.test.ts` (T-04) still pass unmodified.
+- `npm run verify` is green from a clean checkout.
+- **Pass:** all seven.
+
+---
+
 ## T-05 · Auth and login page
 
 ### Step 5.1 — Auth.js credentials provider
