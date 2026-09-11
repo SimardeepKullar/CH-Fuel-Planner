@@ -1,3 +1,7 @@
+"use client";
+
+import { signOut, useSession } from "next-auth/react";
+
 export type TabKey = "plan" | "recent" | "dev";
 
 const TABS: { key: TabKey; label: string }[] = [
@@ -23,6 +27,10 @@ export default function Header({
   onTruckChange,
   planId,
 }: HeaderProps) {
+  const { data: session } = useSession();
+  const displayName = session?.user?.name ?? "…";
+  const role = session?.user?.role ?? "";
+
   return (
     <>
       <header className="topbar">
@@ -41,13 +49,14 @@ export default function Header({
           </button>
         ))}
 
-        {/* Placeholder identity — no auth wired up yet (T-05). */}
         <div className="user-chip">
           <div className="user-chip-id">
-            <span className="user-chip-name">M. Hodson</span>
-            <span className="user-chip-role">Dispatch</span>
+            <span className="user-chip-name">{displayName}</span>
+            <span className="user-chip-role">{role}</span>
           </div>
-          <button className="signout-btn">Sign out</button>
+          <button className="signout-btn" onClick={() => signOut({ callbackUrl: "/" })}>
+            Sign out
+          </button>
         </div>
       </header>
 
