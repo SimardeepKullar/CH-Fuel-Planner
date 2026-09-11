@@ -45,6 +45,9 @@ export interface ValidationRejection {
   siteRef: string | null;
   code: RejectionCode;
   message: string;
+  /** The row's raw PROD value, regardless of rejection code — lets a report
+   * list unmapped codes without re-parsing the message string. */
+  rawProduct: string;
 }
 
 /**
@@ -169,6 +172,7 @@ export function validateRow(
         siteRef: row.site.trim() || null,
         code,
         message: issue?.message ?? "row failed validation",
+        rawProduct: row.prod.trim().toUpperCase(),
       },
     };
   }
