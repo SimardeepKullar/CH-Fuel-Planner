@@ -63,3 +63,19 @@ export interface RoutingProvider {
 
   matrix(req: MatrixRequest): Promise<MatrixResult>;
 }
+
+/**
+ * A provider's non-2xx response, mapped to a typed shape instead of a throw
+ * of the raw body — every adapter's HTTP failures look the same to callers.
+ */
+export class RoutingProviderError extends Error {
+  constructor(
+    public readonly provider: string,
+    public readonly status: number,
+    public readonly code: string | number | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = "RoutingProviderError";
+  }
+}
