@@ -4,6 +4,7 @@ import { parseBvdCsv } from "./parseBvdCsv.js";
 import { validateRow, type ValidatedRow, type ValidationRejection } from "./validate.js";
 import { buildReport, type IngestReport } from "./report.js";
 import type { ProductType } from "../db/types.js";
+import { normalizeCity } from "../resolution/cityNormalize.js";
 
 const DEFAULT_SUPPLIER = "BVD";
 
@@ -58,7 +59,7 @@ async function upsertStation(
      VALUES ($1, $2, $3, $4, $5, $6, 'US')
      ON CONFLICT (supplier, site_ref) DO UPDATE SET last_seen_at = now()
      RETURNING id`,
-    [supplier, row.siteRef, row.nameRaw, row.cityRaw, row.cityRaw, row.stateUsps],
+    [supplier, row.siteRef, row.nameRaw, row.cityRaw, normalizeCity(row.cityRaw), row.stateUsps],
   );
   const id = rows[0]?.id;
   if (!id) {

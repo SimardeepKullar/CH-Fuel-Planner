@@ -159,6 +159,20 @@ describe.skipIf(!hasDatabase)("ingestFile (integration)", () => {
     );
   });
 
+  it("stores city_normalized from normalizeCity(), never overwriting city_raw", async () => {
+    const buffer = makeCsv("2026-08-22", [
+      validRow("1277", "LOVES #368", { city: "ELOY", state: "AZ" }),
+    ]);
+    await ingestFile(scopedPool, buffer, { sourceFilename: "dirty-city.csv" });
+
+    const stations = await scopedPool.query(
+      "SELECT city_raw, city_normalized FROM stations WHERE site_ref = '1277'",
+    );
+    expect(stations.rows).toHaveLength(1);
+    expect(stations.rows[0].city_raw).toBe("ELOY");
+    expect(stations.rows[0].city_normalized).toBe("Eloy");
+  });
+
   it("produces no stdout output", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
