@@ -1,0 +1,65 @@
+import type { LatLng } from "../domain/planResponse.js";
+
+/**
+ * §16's physical spec fields, passed to the provider so it can route around
+ * bridges and weight limits the truck cannot legally use. Nullable fields mean
+ * "not specified" — the provider decides its own default, never `0`.
+ */
+export interface TruckSpec {
+  grossWeightKg: number | null;
+  heightCm: number | null;
+  widthCm: number | null;
+  lengthCm: number | null;
+  axleCount: number | null;
+  hazmatClass: string | null;
+}
+
+export interface RouteLeg {
+  distanceMeters: number;
+  durationSeconds: number;
+}
+
+/**
+ * `legs` is mandatory. T-13's validation loop needs per-leg distances from
+ * the final waypointed route, and an adapter that cannot supply them is
+ * unusable regardless of its other qualities (§8.4).
+ */
+export interface RouteResult {
+  polyline: string;
+  distanceMeters: number;
+  durationSeconds: number;
+  legs: RouteLeg[];
+  providerRaw: unknown;
+}
+
+export interface RouteRequest {
+  origin: LatLng;
+  destination: LatLng;
+  via?: LatLng[];
+  truckSpec: TruckSpec;
+  departAt?: Date;
+}
+
+export interface MatrixResult {
+  distanceMeters: number[][];
+  durationSeconds: number[][];
+}
+
+export interface MatrixRequest {
+  origins: LatLng[];
+  destinations: LatLng[];
+  truckSpec: TruckSpec;
+}
+
+/**
+ * §8.4. Adopting HERE is one new adapter file plus one case in the factory —
+ * nothing downstream (corridor query, optimiser, validation loop, API) knows
+ * which provider produced a route.
+ */
+export interface RoutingProvider {
+  readonly name: "ors" | "here" | "google" | "graphhopper";
+
+  route(req: RouteRequest): Promise<RouteResult>;
+
+  matrix(req: MatrixRequest): Promise<MatrixResult>;
+}
