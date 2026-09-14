@@ -20,7 +20,8 @@
     "test": "vitest run",
     "test:unit": "vitest run --exclude \"**/test/integration/**\"",
     "db:migrate": "tsx src/db/migrate.ts",
-    "seed": "tsx src/cli/seed.ts"
+    "seed": "tsx src/cli/seed.ts",
+    "ingest": "tsx src/cli/ingest.ts"
   },
   "dependencies": {
     "pg": "^8.13.1",

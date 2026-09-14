@@ -26,6 +26,7 @@
     "db:down": "docker compose down",
     "db:migrate": "npm run db:migrate --workspace backend",
     "seed": "npm run seed --workspace backend",
+    "ingest": "tsx backend/src/cli/ingest.ts",
     "db:reset": "docker compose down -v && docker compose up -d --wait && npm run db:migrate",
     "db:logs": "docker compose logs -f db",
     "pretypecheck": "npm run build --workspace backend",
