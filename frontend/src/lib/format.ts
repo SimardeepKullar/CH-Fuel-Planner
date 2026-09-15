@@ -4,6 +4,13 @@
  * the frontend composes labels).
  */
 
+/**
+ * Re-exported from `@ch/core` so `domain/units.ts` stays the only place
+ * unit numbers are validated for display (T-26 DoD, D18) — a second copy
+ * here would be exactly the kind of drift that guard exists to prevent.
+ */
+export { formatUnitNumber } from "@ch/core/domain/units";
+
 export function formatCurrency(amountUsd: number): string {
   const sign = amountUsd < 0 ? "-" : "";
   return `${sign}$${Math.abs(amountUsd).toFixed(2)}`;
@@ -29,19 +36,3 @@ export function formatPricePerGallon(usdPerGallon: number, decimals = 3): string
   return `$${usdPerGallon.toFixed(decimals)}`;
 }
 
-const UNIT_NUMBER_PATTERN = /^\d{3,4}$/;
-
-/**
- * D18 (supersedes D6): unit_number is text, stored exactly as the fleet
- * writes it — never computed or padded. The real roster runs 031...073 and
- * 101, 1012...1023, so a fixed-width pad would either truncate a 4-digit
- * unit or fail to distinguish '031' from a raw '31'. This validates and
- * normalises (trims whitespace) for display; it does not reformat.
- */
-export function formatUnitNumber(unitNumber: string): string {
-  const trimmed = unitNumber.trim();
-  if (!UNIT_NUMBER_PATTERN.test(trimmed)) {
-    throw new Error(`invalid unit number: ${JSON.stringify(unitNumber)}`);
-  }
-  return trimmed;
-}
