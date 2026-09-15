@@ -21,6 +21,8 @@ Same contract as v1. Every ticket is decomposed into steps that can be implement
 
 ## T-25 · Actuals schema migration
 
+**Done — merged to `main` (`324e939`, PR #12).** Steps below are kept as the record of what shipped, not a to-do list: `migrations/0003_actuals.sql` and `0004_actuals_seed.sql` are live. No service, API, or UI code consumes these tables yet — that starts at T-26.
+
 ### Step 25.1 — Reference layer tables
 
 **Goal.** `drivers`, `driver_aliases`, `trucks`, `fuel_cards`, `truck_assignments` apply cleanly.

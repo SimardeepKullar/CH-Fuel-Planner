@@ -1,7 +1,7 @@
 # CH Fuel App — Project scope, v2 (merge addendum)
 
 **Document version:** 2.0 — 14 September 2026
-**Organisation:** 2043733 Ontario Inc., DBA CH Logistics · 5 Matagami Street, Brampton ON
+**Organisation:** 2043733 Ontario Inc., DBA CH Logistics, Burlington ON
 **Relationship to v1:** this document **extends** `PROJECT-SCOPE.md` (v1.0, the Fuel Planner scope). v1 sections stay in force unless a section below supersedes them. Where the two disagree, **v2 wins and v1 gets edited** — same rule v1 applies to its own migrations.
 
 Section numbers are prefixed `A` (A1, A2 …) so they never collide with v1's §1–§23. Cross-references to v1 keep the plain `§` form.
@@ -59,13 +59,14 @@ Internal tool for a handful of named people, not multi-tenant SaaS. Do not desig
 
 ## A3. Where the build stands
 
-Verified 14 September 2026.
+Verified 15 September 2026. This table is the last hand-maintained status snapshot in this doc — for anything past T-25, treat `TICKETS-v2.md`'s ticket index as the source of truth rather than re-syncing this table on every merge.
 
 | Ticket | State |
 |---|---|
 | T-01 … T-10 | **Complete, merged to `main` in `CH-Fuel-Planner`.** Toolchain + CI + hooks; rewritten schema + drift test; seed data (3 truck profiles, gazetteer, 1 user, 1 product code); Next.js/TS migration; `@ch/core` build boundary; auth + login; BVD price-sheet ingest + backfill (30 January dates + August sheet); station resolution 605/605; ORS adapter + budget guard + both meters. |
 | T-11 … T-24 | Specified in `TICKETS.md`, **not built.** Corridor query, optimiser, validation loop, detour costing, geocoding, plan endpoints, disclaimers, read endpoints, `sentToDriver`, frontend client, MapLibre, UI states, deploy. T-20 deferred (§17). |
-| T-25 … T-48 | **New in v2.** `TICKETS-v2.md`. |
+| T-25 | **Complete, merged to `main` (`324e939`, PR #12).** Actuals schema + seed data only — `drivers`, `driver_aliases`, `trucks`, `fuel_cards`, `truck_assignments`, invoice/fuel-stop/anomaly tables, 27-unit reference seed. No service, API, or UI touches these tables yet. |
+| T-26 … T-49 | **New in v2, not built.** `TICKETS-v2.md`. |
 
 The frontend today is the v1 three-tab shell (Plan / Recent / Dev Tools) plus a Metrics tab in the design package. v2 replaces that shell with the sidebar IA in A7 — see A16.
 

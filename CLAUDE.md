@@ -11,13 +11,14 @@ A dispatcher enters a load — origin, destination, truck — and gets back a tr
 When two disagree, the higher one wins and the lower one gets edited.
 
 1. **`migrations/*.sql`** — authoritative for schema. If it disagrees with the scope's §12, the migration is right and §12 gets edited.
-2. **`docs/PROJECT-SCOPE.md`** — the specification. Section refs below (§4, §15.3) point here.
-3. **`docs/TICKETS.md`** — ticket register: goals, files, dependencies, definitions of done.
-4. **`docs/BUILD-PLAN.md`** — per-ticket steps with test plans. Work from this.
+2. **`docs/PROJECT-SCOPE.md`** — the specification (v1, fuel planner, §-numbered). **`docs/PROJECT-SCOPE-v2.md`** extends it (v2, actuals/reconciliation, A-numbered) — where the two disagree, v2 wins and v1 gets edited.
+3. **`docs/TICKETS.md`** — ticket register for T-01–T-24. **`docs/TICKETS-v2.md`** continues it from T-25 onward and is the current source of truth for what's built — see its ticket index rather than hand-tracking status elsewhere.
+4. **`docs/BUILD-PLAN.md`** / **`docs/BUILD-PLAN-v2.md`** — per-ticket steps with test plans, split the same way (T-01–T-24 / T-25+). Work from these.
 5. **`docs/UI-DATA-CONTRACT.md`** — what the frontend needs that §14 does not yet return.
-6. **This file** — workflow and conventions only. Never duplicate spec content here.
+6. **`docs/HANDOFF-PROMPT.md`** — the bootstrap prompt for a fresh session; read it first when picking this project back up cold.
+7. **This file** — workflow and conventions only. Never duplicate spec content here.
 
-The scope marks claims as **Verified** (measured against `data/`), **Decided** (a choice with a reason), or **Open** (§21). Do not treat an Open item as settled, and do not re-litigate a Decided one without saying why.
+The scope marks claims as **Verified** (measured against `data/`), **Decided** (a choice with a reason), or **Open** (§21 in v1, §A18 in v2). Do not treat an Open item as settled, and do not re-litigate a Decided one without saying why.
 
 ---
 

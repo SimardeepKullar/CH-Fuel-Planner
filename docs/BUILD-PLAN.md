@@ -1380,6 +1380,8 @@ The spinner wraps a **single synchronous `fetch`** — `POST /plans` is not a po
 
 # Definition of done
 
+**These checkboxes are the per-step test criteria, not a live status tracker** — they're left unchecked even for merged tickets so the pass condition stays visible. For current build state, see `TICKETS-v2.md`'s ticket index.
+
 ## Per ticket
 
 - [ ] **T-01** — `typecheck`, `test` and `db:migrate` all run; migrate is idempotent; compose validates without the init mount.

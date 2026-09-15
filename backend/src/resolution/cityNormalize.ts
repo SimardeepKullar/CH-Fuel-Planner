@@ -22,7 +22,8 @@ function isAllCaps(value: string): boolean {
   return /[A-Z]/.test(value) && !/[a-z]/.test(value);
 }
 
-function toTitleCase(value: string): string {
+/** Exported so `resolve/normalizeName.ts` (T-26) reuses this word-casing rather than a second copy. */
+export function toTitleCase(value: string): string {
   return value
     .toLowerCase()
     .split(" ")
@@ -38,9 +39,11 @@ function toTitleCase(value: string): string {
 /**
  * Census does not abbreviate every prefix the same way, so this is a fixed
  * lookup, not a rule — closed over the 5 rows §4.6 names, not a general
- * abbreviation expander.
+ * abbreviation expander. Exported so `resolve/normalizeName.ts` (T-26 step
+ * 26.1) shares this exact vocabulary for driver-name matching rather than
+ * writing a second copy that could drift from this one.
  */
-function expandAbbreviatedPrefix(value: string): string {
+export function expandAbbreviatedPrefix(value: string): string {
   const match = /^(Mc|Mt|St|N)\s+(.+)$/i.exec(value);
   if (!match) {
     return value;
