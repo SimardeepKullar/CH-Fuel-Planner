@@ -59,7 +59,7 @@ If the spec and the repository disagree, say so and propose the edit.
 | T-22 | MapLibre map | T-21 | 5 | specified |
 | T-23 | Missing UI states | T-21 | 5 | specified · amend per D15 |
 | T-24 | Deployment — Vercel + Neon | T-21 | 6 | specified · amend per A16 |
-| **T-25** | **Actuals schema migration** | T-02 | **7** | **new** |
+| **T-25** | **Actuals schema migration** | T-02 | **7** | **done — merged (`324e939`, PR #12)** |
 | **T-26** | **Shared reference layer and effective-dated assignments** | T-25 | **7** | **new** |
 | **T-27** | **BVD invoice parser — Excel, with PDF fallback** | T-25 | **7** | **new** |
 | **T-28** | **Reconciliation and quarantine** | T-27 | **7** | **new** |

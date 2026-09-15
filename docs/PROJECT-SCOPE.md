@@ -80,7 +80,7 @@ Verified from the 2026-08-22 sheet: the spread between the cheapest and dearest 
 
 ## 2. Where the project actually stands
 
-Verified by inspection of the repository on 4 September 2026.
+Verified by inspection of the repository on 4 September 2026. **This section is a frozen baseline snapshot, not a live status tracker** — for current build state, see `TICKETS-v2.md`'s ticket index, the single source of truth for what's merged.
 
 ### What exists
 
@@ -706,7 +706,7 @@ Deliveries repeat, so origin and destination addresses recur. Cache resolved coo
 
 ## 12. Database schema
 
-**`migrations/*.sql` is authoritative.** This section is the target design. §12.1 lists every place the current migration diverges from it, and what to do about each.
+**`migrations/*.sql` is authoritative.** This section is the target design. §12.1 lists every place the current migration diverges from it, and what to do about each. It covers only the v1 (fuel-planner) tables below — v2 adds an additive actuals schema (`drivers`, `trucks`, `fuel_cards`, invoices, reconciliation) on top of these via `migrations/0003_actuals.sql`/`0004_actuals_seed.sql`; see `PROJECT-SCOPE-v2.md` §A11 for that target design.
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS postgis;
@@ -765,7 +765,9 @@ CREATE TABLE truck_profiles (
   id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   slug                 text NOT NULL,
   display_name         text NOT NULL,
-  truck_number         integer UNIQUE,          -- fleet unit number, if assigned
+  truck_number         integer UNIQUE,          -- fleet unit number, if assigned. This is a v1 profile/template field (D6) — distinct
+                                                 -- from v2's `trucks.unit_number` (text, D18), which identifies a real fleet unit for
+                                                 -- actuals matching. The two are different concepts, not competing designs.
   owner_user_id        uuid REFERENCES users(id),
   is_system            boolean NOT NULL DEFAULT false,
   is_active            boolean NOT NULL DEFAULT true,
@@ -1663,13 +1665,13 @@ Numbered in the order they should be built. Nothing below is done.
 
 ## 21. Open questions
 
-These need answers before the steps that depend on them. None blocks step 1 except Q2 and Q3.
+These need answers before the steps that depend on them.
 
 | # | Question | Affects | Recommendation |
 |---|---|---|---|
-| **Q1** | **Drizzle or Kysely?** | §7, all data access | **Drizzle** — its schema-in-TypeScript pairs naturally with the drift test in §12.2. Kysely is the better pure query builder if you would rather write SQL. Either works; pick one and do not mix. |
-| **Q2** | **`reserve_fraction`: 0.15 (spec) or 0.10 (current migration)?** | §5.5, §12.1 item 6, step 1 | **0.15.** It absorbs the ±10% MPG error in §18 risk 5 with margin to spare, and tank capacity never binds anyway (§16). |
-| **Q3** | **`uuid` or `bigserial` primary keys?** | §12, step 1 | **`bigserial` for high-volume rows** (`station_prices`, `plan_stops`), **`uuid` for anything exposed in a URL** (`plans`, `stations`, `price_imports`). The current migration is all-bigserial; the spec is all-uuid. Mixed-by-rule is better than either blanket choice. |
+| **Q1** | ~~Drizzle or Kysely?~~ | §7, all data access | **Closed — see `TICKETS.md` D1.** Decided: no ORM/query builder, raw parameterised SQL over `pg`. |
+| **Q2** | ~~`reserve_fraction`: 0.15 (spec) or 0.10 (current migration)?~~ | §5.5, §12.1 item 6, step 1 | **Closed — see `TICKETS.md` D2.** Decided: 0.15. |
+| **Q3** | ~~`uuid` or `bigserial` primary keys?~~ | §12, step 1 | **Closed — see `TICKETS.md` D3.** Decided: mixed by rule — `bigserial` for high-volume rows, `uuid` for anything exposed in a URL. |
 | **Q4** | **What is the real MPG of the fleet?** | §16, every dollar figure | Cannot be answered from here. Until it is, the app's costs are directionally right and absolutely wrong. Flag it in the UI. |
 | **Q5** | **Exact wording of the Google Maps disclaimer.** | §9.4, step 13 | Needs your sign-off since it is the one legal-ish statement a driver sees. Pin it with a test once agreed. |
 | **Q6** | **Does this count as business use for Vercel?** | §10, $20/mo | Almost certainly yes. Budget for Pro. |
