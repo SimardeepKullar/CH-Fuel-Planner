@@ -197,4 +197,23 @@ describe.skipIf(!hasDatabase)("schema drift (integration)", () => {
       "table provider_quota: in database, missing from descriptor",
     ]);
   });
+
+  // T-25: A11's actuals tables. express_charges.driver_id is the nullable
+  // case called out by name in the ticket — the blank-name row in A19 is
+  // real data, not a defect, and a wrong NOT NULL here would reject it.
+  it("detects a wrong nullability on express_charges.driver_id", () => {
+    const tampered = SCHEMA.map((table) =>
+      table.name === "express_charges"
+        ? {
+            ...table,
+            columns: table.columns.map((c) =>
+              c.name === "driver_id" ? { ...c, nullable: false } : c,
+            ),
+          }
+        : table,
+    );
+    expect(diffSchema(tampered, actual)).toEqual([
+      "express_charges.driver_id: descriptor uuid NOT NULL, database uuid NULL",
+    ]);
+  });
 });

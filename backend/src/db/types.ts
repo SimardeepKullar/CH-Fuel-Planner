@@ -302,3 +302,161 @@ export interface SchemaMigrationRow {
   filename: string;
   applied_at: Date;
 }
+
+// ─── Actuals (v2, A11) ──────────────────────────────────────────────────
+
+export type PersonCardStatus = "active" | "inactive";
+export type InvoiceStatus = "quarantined" | "imported";
+export type ReceiptStatus = "pending" | "confirmed" | "missing";
+export type ReceiptOutcome = "confirmed" | "missing";
+export type AnomalySeverity = "amber" | "red";
+export type ExpressMatchStatus = "matched" | "unmatched";
+export type MatchKind = "matched" | "skipped_recommendation" | "unplanned_stop";
+
+export interface DriverRow {
+  id: string;
+  display_name: string;
+  status: PersonCardStatus;
+  created_at: Date;
+}
+
+export interface DriverAliasRow {
+  alias_normalized: string;
+  driver_id: string;
+  source: string;
+  confirmed_at: Date | null;
+}
+
+export interface TruckRow {
+  id: string;
+  /** Text, never integer — '072' and '1012' coexist (D6). */
+  unit_number: string;
+  truck_profile_id: string | null;
+  created_at: Date;
+}
+
+export interface FuelCardRow {
+  id: string;
+  card_number: string;
+  supplier: string;
+  status: PersonCardStatus;
+  created_at: Date;
+}
+
+export interface CardAssignmentRow {
+  id: string;
+  card_id: string;
+  truck_id: string;
+  driver_id: string;
+  effective_from: Date;
+  /** Null means current. */
+  effective_to: Date | null;
+  created_at: Date;
+}
+
+export interface InvoiceRow {
+  id: string;
+  invoice_number: string;
+  period_start: Date;
+  period_end: Date;
+  invoice_date: Date;
+  due_date: Date;
+  grand_total_usd: Numeric;
+  status: InvoiceStatus;
+  file_sha256: string;
+  imported_at: Date;
+}
+
+export interface InvoiceTotalRow {
+  invoice_id: string;
+  product_code: string;
+  gallons: Numeric;
+  amount_usd: Numeric;
+}
+
+export interface FuelStopRow {
+  id: string;
+  invoice_id: string;
+  base_auth_code: string;
+  occurred_at: Date;
+  card_id: string;
+  truck_id: string | null;
+  driver_id: string | null;
+  unit_raw: string;
+  driver_name_raw: string;
+  station_id: string | null;
+  total_usd: Numeric;
+  receipt_status: ReceiptStatus;
+}
+
+export interface FuelStopLineRow {
+  id: BigIntString;
+  fuel_stop_id: string;
+  product_code: string;
+  gallons: Numeric;
+  retail_usd_per_gal: Numeric;
+  /** numeric(9,4) — 4dp survives a round trip, never rounded to 2dp. */
+  billed_usd_per_gal: Numeric;
+  amount_usd: Numeric;
+}
+
+export interface ExpressChargeRow {
+  id: BigIntString;
+  invoice_id: string;
+  express_code: string;
+  occurred_at: Date;
+  truck_id: string;
+  unit_raw: string;
+  driver_id: string | null;
+  driver_name_raw: string | null;
+  amount_usd: Numeric;
+  fee_usd: Numeric;
+  total_usd: Numeric;
+  payee: string | null;
+  note: string | null;
+  category: string | null;
+  match_status: ExpressMatchStatus;
+}
+
+export interface InvoiceRejectionRow {
+  id: BigIntString;
+  invoice_id: string;
+  line_number: number;
+  auth_code: string | null;
+  code: string;
+  message: string;
+}
+
+export interface ReceiptCheckRow {
+  id: BigIntString;
+  fuel_stop_id: string;
+  checked_by: string;
+  checked_at: Date;
+  outcome: ReceiptOutcome;
+}
+
+export interface AnomalyRow {
+  id: BigIntString;
+  subject_type: string;
+  subject_id: string;
+  rule: string;
+  severity: AnomalySeverity;
+  detail: unknown;
+  detected_at: Date;
+  dismissed_at: Date | null;
+}
+
+export interface AnomalyThresholdRow {
+  rule: string;
+  config: unknown;
+  updated_at: Date;
+}
+
+export interface PlanActualMatchRow {
+  id: BigIntString;
+  plan_id: string;
+  plan_stop_id: BigIntString | null;
+  fuel_stop_id: string | null;
+  kind: MatchKind;
+  delta_usd: Numeric | null;
+}

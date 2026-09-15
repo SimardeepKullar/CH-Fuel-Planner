@@ -57,6 +57,215 @@ const createdAt = (name = "created_at"): ColumnDescriptor =>
 
 export const SCHEMA: readonly TableDescriptor[] = [
   {
+    name: "anomalies",
+    columns: [
+      bigserialPk("anomalies"),
+      col("subject_type", "text"),
+      col("subject_id", "uuid"),
+      t("rule"),
+      t("severity"),
+      col("detail", "jsonb", false, "'{}'::jsonb"),
+      createdAt("detected_at"),
+      col("dismissed_at", "timestamptz", true),
+    ],
+    checks: [
+      "CHECK ((severity = ANY (ARRAY['amber'::text, 'red'::text])))",
+    ],
+  },
+  {
+    name: "anomaly_thresholds",
+    columns: [
+      t("rule"),
+      col("config", "jsonb", false, "'{}'::jsonb"),
+      createdAt("updated_at"),
+    ],
+  },
+  {
+    name: "card_assignments",
+    columns: [
+      uuidPk(),
+      col("card_id", "uuid"),
+      col("truck_id", "uuid"),
+      col("driver_id", "uuid"),
+      col("effective_from", "date"),
+      col("effective_to", "date", true),
+      createdAt(),
+    ],
+    checks: [
+      "CHECK (((effective_to IS NULL) OR (effective_to >= effective_from)))",
+      // EXCLUDE USING gist (card_id WITH =, daterange(...) WITH &&) also
+      // guards this table but is contype 'x', not 'c' — the drift query only
+      // reads CHECK constraints, same limitation as every other table here.
+    ],
+  },
+  {
+    name: "driver_aliases",
+    columns: [
+      col("alias_normalized", "text"),
+      col("driver_id", "uuid"),
+      t("source"),
+      col("confirmed_at", "timestamptz", true),
+    ],
+  },
+  {
+    name: "drivers",
+    columns: [
+      uuidPk(),
+      t("display_name"),
+      t("status", false, "'active'::text"),
+      createdAt(),
+    ],
+    checks: [
+      "CHECK ((status = ANY (ARRAY['active'::text, 'inactive'::text])))",
+    ],
+  },
+  {
+    name: "express_charges",
+    columns: [
+      bigserialPk("express_charges"),
+      col("invoice_id", "uuid"),
+      t("express_code"),
+      col("occurred_at", "timestamptz"),
+      col("truck_id", "uuid"),
+      t("unit_raw"),
+      col("driver_id", "uuid", true),
+      t("driver_name_raw", true),
+      col("amount_usd", "numeric"),
+      col("fee_usd", "numeric", false, "3.00"),
+      col("total_usd", "numeric"),
+      t("payee", true),
+      t("note", true),
+      t("category", true),
+      t("match_status", false, "'unmatched'::text"),
+    ],
+    checks: [
+      "CHECK ((match_status = ANY (ARRAY['matched'::text, 'unmatched'::text])))",
+    ],
+  },
+  {
+    name: "fuel_cards",
+    columns: [
+      uuidPk(),
+      t("card_number"),
+      t("supplier", false, "'BVD'::text"),
+      t("status", false, "'active'::text"),
+      createdAt(),
+    ],
+    checks: [
+      "CHECK ((status = ANY (ARRAY['active'::text, 'inactive'::text])))",
+    ],
+  },
+  {
+    name: "fuel_stop_lines",
+    columns: [
+      bigserialPk("fuel_stop_lines"),
+      col("fuel_stop_id", "uuid"),
+      t("product_code"),
+      col("gallons", "numeric"),
+      col("retail_usd_per_gal", "numeric"),
+      // 4dp survives a round trip — 5.2395 in, 5.2395 out, never rounded.
+      col("billed_usd_per_gal", "numeric"),
+      col("amount_usd", "numeric"),
+    ],
+  },
+  {
+    name: "fuel_stops",
+    columns: [
+      uuidPk(),
+      col("invoice_id", "uuid"),
+      t("base_auth_code"),
+      col("occurred_at", "timestamptz"),
+      col("card_id", "uuid"),
+      col("truck_id", "uuid", true),
+      col("driver_id", "uuid", true),
+      t("unit_raw"),
+      t("driver_name_raw"),
+      col("station_id", "uuid", true),
+      col("total_usd", "numeric"),
+      t("receipt_status", false, "'pending'::text"),
+    ],
+    checks: [
+      "CHECK ((receipt_status = ANY (ARRAY['pending'::text, 'confirmed'::text, 'missing'::text])))",
+    ],
+  },
+  {
+    name: "invoice_rejections",
+    columns: [
+      bigserialPk("invoice_rejections"),
+      col("invoice_id", "uuid"),
+      col("line_number", "int4"),
+      t("auth_code", true),
+      t("code"),
+      t("message"),
+    ],
+  },
+  {
+    name: "invoice_totals",
+    columns: [
+      col("invoice_id", "uuid"),
+      t("product_code"),
+      col("gallons", "numeric"),
+      col("amount_usd", "numeric"),
+    ],
+  },
+  {
+    name: "invoices",
+    columns: [
+      uuidPk(),
+      t("invoice_number"),
+      col("period_start", "date"),
+      col("period_end", "date"),
+      col("invoice_date", "date"),
+      col("due_date", "date"),
+      col("grand_total_usd", "numeric"),
+      t("status"),
+      col("file_sha256", "bpchar"),
+      createdAt("imported_at"),
+    ],
+    checks: [
+      "CHECK ((status = ANY (ARRAY['quarantined'::text, 'imported'::text])))",
+    ],
+  },
+  {
+    name: "plan_actual_matches",
+    columns: [
+      bigserialPk("plan_actual_matches"),
+      col("plan_id", "uuid"),
+      col("plan_stop_id", "int8", true),
+      col("fuel_stop_id", "uuid", true),
+      t("kind"),
+      col("delta_usd", "numeric", true),
+    ],
+    checks: [
+      "CHECK ((kind = ANY (ARRAY['matched'::text, 'skipped_recommendation'::text, 'unplanned_stop'::text])))",
+      "CHECK (((plan_stop_id IS NOT NULL) OR (fuel_stop_id IS NOT NULL)))",
+    ],
+  },
+  {
+    name: "receipt_checks",
+    columns: [
+      bigserialPk("receipt_checks"),
+      col("fuel_stop_id", "uuid"),
+      col("checked_by", "uuid"),
+      createdAt("checked_at"),
+      t("outcome"),
+    ],
+    checks: [
+      "CHECK ((outcome = ANY (ARRAY['confirmed'::text, 'missing'::text])))",
+    ],
+  },
+  {
+    name: "trucks",
+    columns: [
+      uuidPk(),
+      // Text, never integer: '072' and '1012' coexist and the leading zero
+      // is meaningful (D6).
+      t("unit_number"),
+      col("truck_profile_id", "uuid", true),
+      createdAt(),
+    ],
+  },
+  {
     name: "import_batches",
     columns: [
       uuidPk(),
