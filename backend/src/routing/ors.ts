@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 import pino from "pino";
+import type { Pool } from "pg";
 import type { LatLng } from "../domain/planResponse.js";
+import { withBudgetGuard } from "./budgetGuard.js";
+import { parseQuotaHeaders, recordQuota } from "./quotaObserver.js";
 import {
   RoutingProviderError,
   type MatrixRequest,
@@ -15,6 +18,19 @@ const ORS_BASE_URL = "https://api.openrouteservice.org";
 const DIRECTIONS_PATH = "/v2/directions/driving-hgv/json";
 const MATRIX_PATH = "/v2/matrix/driving-hgv";
 
+type OrsEndpoint = "directions" | "matrix";
+
+/**
+ * §8.3, measured against the live free tier on 2026-09-14: 200/day for
+ * directions, 50/day for matrix — the "unverified" v3.4 figures, confirmed,
+ * not the 2,000/500 the documentation quotes. The budget guard's ceiling is
+ * set from this measurement (§21 step 5), pooled monthly per §8.3.
+ */
+const DEFAULT_BUDGET_CEILINGS: Record<OrsEndpoint, number> = {
+  directions: 200,
+  matrix: 50,
+};
+
 type Logger = Pick<pino.Logger, "info" | "error">;
 
 export interface OrsRoutingProviderOptions {
@@ -22,6 +38,14 @@ export interface OrsRoutingProviderOptions {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
   logger?: Logger;
+  /**
+   * Both meters (§8.3) need somewhere to persist. Omit it to skip metering
+   * entirely — the offline fixture suite does this so it stays free of a
+   * database dependency; the factory wires a real pool for production use.
+   */
+  pool?: Pool;
+  /** Overrides `DEFAULT_BUDGET_CEILINGS`, per endpoint. */
+  budgetCeilings?: Partial<Record<OrsEndpoint, number>>;
 }
 
 interface OrsRouteResponseBody {
@@ -92,12 +116,16 @@ export class OrsRoutingProvider implements RoutingProvider {
   private readonly fetchImpl: typeof fetch;
   private readonly logger: Logger;
   private readonly explicitApiKey: string | undefined;
+  private readonly pool: Pool | undefined;
+  private readonly budgetCeilings: Record<OrsEndpoint, number>;
 
   constructor(options: OrsRoutingProviderOptions = {}) {
     this.baseUrl = options.baseUrl ?? ORS_BASE_URL;
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.logger = options.logger ?? pino();
     this.explicitApiKey = options.apiKey;
+    this.pool = options.pool;
+    this.budgetCeilings = { ...DEFAULT_BUDGET_CEILINGS, ...options.budgetCeilings };
   }
 
   private apiKey(): string {
@@ -150,13 +178,12 @@ export class OrsRoutingProvider implements RoutingProvider {
     };
   }
 
-  private async call<T>(endpoint: string, path: string, body: Record<string, unknown>): Promise<T> {
+  private async call<T>(endpoint: OrsEndpoint, path: string, body: Record<string, unknown>): Promise<T> {
     const hash = requestHash({ endpoint, body });
     const url = `${this.baseUrl}${path}`;
 
-    let response: Response;
-    try {
-      response = await this.fetchImpl(url, {
+    const doFetch = (): Promise<Response> =>
+      this.fetchImpl(url, {
         method: "POST",
         headers: {
           Authorization: this.apiKey(),
@@ -164,9 +191,19 @@ export class OrsRoutingProvider implements RoutingProvider {
         },
         body: JSON.stringify(body),
       });
+
+    let response: Response;
+    try {
+      response = this.pool
+        ? await withBudgetGuard(this.pool, this.name, endpoint, this.budgetCeilings[endpoint], doFetch)
+        : await doFetch();
     } catch (err) {
       this.logger.error({ provider: "ors", endpoint, requestHash: hash, err }, "ors request failed");
       throw err;
+    }
+
+    if (this.pool) {
+      await recordQuota(this.pool, this.name, endpoint, parseQuotaHeaders(response.headers));
     }
 
     const status = response.status;
