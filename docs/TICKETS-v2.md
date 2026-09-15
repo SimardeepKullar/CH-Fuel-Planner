@@ -111,11 +111,12 @@ Each ticket states a **goal**, the **files** it touches (new vs existing, and fo
 - [ ] `db:reset` applies all four migrations; a second `db:migrate` is a no-op.
 - [ ] `fuel_stop_lines.billed_usd_per_gal` is `numeric(9,4)` — 4dp survives a round trip (`5.2395` in, `5.2395` out, not `5.24`).
 - [ ] `invoices.file_sha256` and `invoices.invoice_number` are both unique; the same bytes twice are refused.
-- [ ] `card_assignments` rejects overlapping effective ranges for one card.
+- [ ] `truck_assignments` rejects overlapping effective ranges for one driver.
+- [ ] `fuel_cards` rejects a second active card for one driver (D19), but allows a replaced (inactive) card alongside a new active one.
 - [ ] Deleting an invoice cascades to `fuel_stops`, `fuel_stop_lines` and `express_charges`; deleting a `station` referenced by a stop is **refused**.
 - [ ] `anomalies.severity` rejects anything outside two values.
 - [ ] The drift test covers every new table and **fails** on an injected wrong nullability.
-- [ ] `0004_actuals_seed.sql` seeds the 27 cards, 27 units and 27 drivers from A19 with one initial assignment each.
+- [ ] `0004_actuals_seed.sql` seeds the 27 cards, 27 units and 27 drivers from A19, each card carrying its driver and each driver one initial truck assignment.
 
 ---
 
@@ -130,9 +131,9 @@ Each ticket states a **goal**, the **files** it touches (new vs existing, and fo
 **Dependencies.** T-25.
 
 **Definition of done.**
-- [ ] `resolveAssignment(cardId, at)` returns the truck and driver in force **at that instant**, not the current one.
-- [ ] Reassigning a card tomorrow does not change what yesterday's stop resolves to — asserted with a stop either side of the boundary.
-- [ ] `formatUnitNumber` (T-01) is the only place unit numbers are padded; `1012` is not truncated.
+- [ ] `resolveAssignment(cardId, at)` returns the driver (`fuel_cards.driver_id`, permanent — D19) and the truck in force **at that instant** (`truck_assignments`), not the current one.
+- [ ] Reassigning a driver's truck tomorrow does not change what yesterday's stop resolves to — asserted with a stop either side of the boundary.
+- [ ] `formatUnitNumber` (T-01) is the only place unit numbers are validated for display (D18); `1012` is not truncated.
 - [ ] Alias lookup is case- and whitespace-insensitive and shares its normaliser with `cityNormalize.ts`'s conventions (`Mc`/`Mt`/`St`, title casing).
 - [ ] An unmatched driver name returns **unmatched**, never a best guess.
 - [ ] A truck with no profile still resolves (profiles are optional metadata, not the key).
@@ -192,7 +193,7 @@ Each ticket states a **goal**, the **files** it touches (new vs existing, and fo
 **Dependencies.** T-26, T-28.
 
 **Definition of done.**
-- [ ] Truck resolves from `card_id` + `occurred_at` via `card_assignments` — **never** from the entered unit text.
+- [ ] Truck resolves from `card_id` → `driver_id` (`fuel_cards`) + `occurred_at` via `truck_assignments` — **never** from the entered unit text.
 - [ ] `unit_raw` and `driver_name_raw` are stored verbatim and never overwritten.
 - [ ] The real cases resolve as specified: `0` entered on card 2956373 → truck **072**, flagged disagreement; `072` entered on two different cards the same day → two different trucks, no flag; `1012` entered by two drivers → resolved per card.
 - [ ] Station text (`LOVES #294`) resolves through **T-08's existing store-number parser** — asserted by import, not reimplementation.

@@ -23,21 +23,23 @@ Same contract as v1. Every ticket is decomposed into steps that can be implement
 
 ### Step 25.1 — Reference layer tables
 
-**Goal.** `drivers`, `driver_aliases`, `trucks`, `fuel_cards`, `card_assignments` apply cleanly.
+**Goal.** `drivers`, `driver_aliases`, `trucks`, `fuel_cards`, `truck_assignments` apply cleanly.
 
 **Files.** New: `migrations/0003_actuals.sql`. **Left alone:** `0001_init.sql` and `0002_seed.sql` — both have applied; A16 forbids editing them.
 
-**Logic.** A11's reference block. `trucks.unit_number` is **text**, never integer — `072` and `1012` coexist and the leading zero is meaningful (D6). `card_assignments` carries `effective_from`/`effective_to` with `effective_to` nullable for "current", and an exclusion constraint so one card cannot have two overlapping assignments.
+**Logic.** A11's reference block. `trucks.unit_number` is **text**, never integer — `072` and `1012` coexist and the leading zero is meaningful (**D18, which supersedes D6**; retire T-01's three-digit pad in this step, per A16). `fuel_cards.driver_id` is a **permanent, direct** link (D19) — a card belongs to one driver for its whole life; a lost card is a new row, not a repointed `driver_id`, so it needs no date range and no exclusion constraint. `truck_assignments(driver_id, truck_id, effective_from, effective_to)` carries the relationship that actually changes (a repair swap), with `effective_to` nullable for "current" and an exclusion constraint so one driver cannot have two overlapping truck assignments.
 
-The temptation to fold `trucks` into v1's `truck_profiles` must be resisted: a profile is a *model spec* (capacity, mpg, dimensions) shared by several trucks; a truck is a *fleet number* with a card history. Conflating them is why v1's placeholder `truck_number` column exists, and A16 retires it.
+The temptation to fold `trucks` into v1's `truck_profiles` must be resisted: a profile is a *model spec* (capacity, mpg, dimensions) shared by several trucks; a truck is a *fleet number* with an assignment history. Conflating them is why v1's placeholder `truck_number` column exists, and A16 retires it.
 
 **Tests.**
 - `db:migrate` applies; second run is a no-op.
-- `unit_number = '072'` round-trips with its leading zero.
-- Two overlapping assignments for one card → rejected by constraint, not by application code.
+- `unit_number = '072'` round-trips with its leading zero, and `'1012'` round-trips at four digits.
+- `formatUnitNumber('1012')` returns `1012`, not a truncation or a three-digit pad; `formatUnitNumber('31')` is rejected rather than silently padded to `031`.
+- Two overlapping truck assignments for one driver → rejected by constraint, not by application code.
 - `effective_to = NULL` is accepted and means current.
+- A second active card for one driver is rejected; an inactive card alongside a new active one for the same driver is accepted (D19).
 - An alias unique on `alias_normalized` rejects a duplicate spelling of one name.
-- **Pass:** all five.
+- **Pass:** all seven.
 
 ### Step 25.2 — Invoice layer tables
 
@@ -82,12 +84,12 @@ The temptation to fold `trucks` into v1's `truck_profiles` must be resisted: a p
 
 **Files.** New: `migrations/0004_actuals_seed.sql`. Modified: `backend/src/db/schema.ts`, `backend/src/db/types.ts`, `backend/test/integration/drift.test.ts` (extends, does not replace).
 
-**Logic.** Seed the 27 cards, 27 units and 27 drivers from A19, plus one `card_assignments` row per card with a plausible `effective_from` and null `effective_to`. Seeding the assignment is what makes T-29's resolution testable against real data on day one.
+**Logic.** Seed the 27 cards, 27 units and 27 drivers from A19: each card gets its one permanent `driver_id` (D19, a plain `UPDATE`, no date range), and each driver gets one `truck_assignments` row with a plausible `effective_from` and null `effective_to`. Seeding the assignment is what makes T-29's resolution testable against real data on day one.
 
 **Tests.**
 - Descriptor matches `information_schema` for every new table.
 - An injected wrong nullability on `express_charges.driver_id` **fails** the drift test.
-- Seed yields 27/27/27 with 27 current assignments and re-runs without duplicating.
+- Seed yields 27/27/27, all 27 cards carrying a `driver_id`, and 27 current `truck_assignments` rows, re-running without duplicating.
 - **Pass:** all three.
 
 ---
@@ -118,17 +120,18 @@ The temptation to fold `trucks` into v1's `truck_profiles` must be resisted: a p
 
 **Files.** New: `backend/src/catalog/assignments.ts` + test.
 
-**Logic.** Select the assignment whose `[effective_from, effective_to)` contains `at`. Pure over an injected row set in unit tests; the database version is one indexed query.
+**Logic.** Two hops, not one (D19): `cardId` → `driver_id` is `fuel_cards.driver_id`, a direct lookup with no time dimension. `driver_id` + `at` → `truck_id` selects the `truck_assignments` row whose `[effective_from, effective_to)` contains `at`. Pure over injected row sets in unit tests; the database version is one indexed query per hop. The function's external contract (card + instant in, truck + driver out) is unchanged from the original single-table design — only the internal join moved.
 
-**Why point-in-time and not current.** A card reassigned in October must not change what a September stop resolves to. Getting this wrong corrupts history silently and is invisible in review — which is why it gets its own step and its own boundary tests rather than being a clause inside the importer.
+**Why point-in-time and not current.** A driver moved to a different truck in October must not change what a September stop resolves to. Getting this wrong corrupts history silently and is invisible in review — which is why it gets its own step and its own boundary tests rather than being a clause inside the importer.
 
 **Tests.**
-- A stop one second before a boundary resolves to the old truck; one second after, the new one.
-- An open-ended assignment (`effective_to` null) resolves for any later instant.
-- A gap with no assignment returns null — not the nearest assignment.
-- `formatUnitNumber` output is used for display and `1012` is not truncated.
+- A stop one second before a truck-assignment boundary resolves to the old truck; one second after, the new one.
+- An open-ended truck assignment (`effective_to` null) resolves for any later instant.
+- A gap with no truck assignment returns a null truck — not the nearest one.
+- A card with no `driver_id` (unassigned, or between cards) resolves to a null driver and a null truck, not an error.
+- `formatUnitNumber` output is used for display and `1012` is not truncated (D18).
 - A truck with no `truck_profile_id` still resolves.
-- **Pass:** all five.
+- **Pass:** all six.
 
 ---
 

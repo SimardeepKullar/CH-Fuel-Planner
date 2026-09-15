@@ -23,10 +23,13 @@ describe("format", () => {
     expect(formatDuration(32700)).toBe("9h 05m");
   });
 
-  it("formats a three-digit zero-padded unit number", () => {
-    expect(formatUnitNumber(22)).toBe("022");
-    expect(formatUnitNumber(7)).toBe("007");
-    expect(formatUnitNumber(1234)).toBe("1234");
+  it("returns a 3- or 4-digit unit number unchanged, preserving its leading zero", () => {
+    expect(formatUnitNumber("072")).toBe("072");
+    expect(formatUnitNumber("1012")).toBe("1012");
+  });
+
+  it("rejects a unit number shorter than 3 digits rather than silently padding it", () => {
+    expect(() => formatUnitNumber("31")).toThrow();
   });
 
   it("formats distance and gallons with one decimal place", () => {
