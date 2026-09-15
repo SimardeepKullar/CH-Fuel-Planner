@@ -1,6 +1,7 @@
 -- Seed the reference layer (T-25 step 25.4): the 27 cards, 27 units and 27
--- drivers from PROJECT-SCOPE-v2.md §A19, plus one current card_assignments
--- row per card. Idempotent — re-running this file must not duplicate rows.
+-- drivers from PROJECT-SCOPE-v2.md §A19, each card given its one permanent
+-- driver and each driver one current truck_assignments row. Idempotent —
+-- re-running this file must not duplicate rows or clobber a real reassignment.
 --
 -- The driver/card/unit pairing below is not arbitrary: card 2956373 must
 -- resolve to truck 072, because §A10's "entered unit ≠ assigned truck"
@@ -50,42 +51,83 @@ VALUES
   ('1019'), ('1022'), ('1023')
 ON CONFLICT (unit_number) DO NOTHING;
 
--- ─── Card assignments ─────────────────────────────────────────────────────
--- One current assignment per card, effective from well before the earliest
+-- ─── Card → driver (permanent) ──────────────────────────────────────────
+-- Each card belongs to exactly one driver, for the card's whole life. An
+-- UPDATE, not an assignment row: there is nothing to date-range here (a
+-- lost card becomes a new card_number, not a repointed driver_id). The
+-- driver_id IS NULL guard means re-running this file never overwrites a
+-- real reassignment made through the app.
+
+UPDATE fuel_cards fc
+SET driver_id = d.id
+FROM (VALUES
+  ('2956373', 'NAVJOT'),
+  ('2957082', 'ADITYA'),
+  ('2956787', 'AMRIT DHILLION'),
+  ('2956381', 'LOVEPREET SINGH'),
+  ('2955805', 'DHNESH KUMAR'),
+  ('2955961', 'JATINDER'),
+  ('2956043', 'RAVINDER'),
+  ('2956290', 'RAJVEER RANA'),
+  ('2956407', 'HARINDER GREWAL'),
+  ('2956639', 'RAJVEER GILL'),
+  ('2956670', 'AMRINDER BATH'),
+  ('2956696', 'NARINDER NINDA'),
+  ('2956704', 'NARESH KUMAR'),
+  ('2956811', 'TARSEM SINGH'),
+  ('2956894', 'HARPAL SUMRA'),
+  ('2956936', 'DHARMINDER'),
+  ('2956951', 'KULWANT SINGH BAL'),
+  ('2956985', 'JASWINDER'),
+  ('2957033', 'GURDEEP SINGH'),
+  ('2957124', 'AMRITPAL SIDHU'),
+  ('2957140', 'CHARJIT SINGH'),
+  ('2957165', 'GURJIT SINGH'),
+  ('2957181', 'JUGRAJ SINGH SAMRA'),
+  ('2957199', 'GURWINDER D'),
+  ('2957215', 'SIMRAN'),
+  ('2957322', 'MOHINDER'),
+  ('2957447', 'PARVINDER')
+) AS pairing(card_number, display_name)
+JOIN drivers d ON d.display_name = pairing.display_name
+WHERE fc.card_number = pairing.card_number
+  AND fc.driver_id IS NULL;
+
+-- ─── Driver → truck (effective-dated) ───────────────────────────────────
+-- One current assignment per driver, effective from well before the earliest
 -- invoice date on disk so the §A19 sample stops resolve against it.
 
-INSERT INTO card_assignments (card_id, truck_id, driver_id, effective_from, effective_to)
-SELECT fc.id, t.id, d.id, '2026-01-01'::date, NULL
+INSERT INTO truck_assignments (driver_id, truck_id, effective_from, effective_to)
+SELECT d.id, t.id, '2026-01-01'::date, NULL
 FROM (VALUES
-  ('2956373', '072',  'NAVJOT'),
-  ('2957082', '031',  'ADITYA'),
-  ('2956787', '039',  'AMRIT DHILLION'),
-  ('2956381', '041',  'LOVEPREET SINGH'),
-  ('2955805', '044',  'DHNESH KUMAR'),
-  ('2955961', '047',  'JATINDER'),
-  ('2956043', '050',  'RAVINDER'),
-  ('2956290', '051',  'RAJVEER RANA'),
-  ('2956407', '052',  'HARINDER GREWAL'),
-  ('2956639', '057',  'RAJVEER GILL'),
-  ('2956670', '061',  'AMRINDER BATH'),
-  ('2956696', '063',  'NARINDER NINDA'),
-  ('2956704', '064',  'NARESH KUMAR'),
-  ('2956811', '065',  'TARSEM SINGH'),
-  ('2956894', '066',  'HARPAL SUMRA'),
-  ('2956936', '069',  'DHARMINDER'),
-  ('2956951', '070',  'KULWANT SINGH BAL'),
-  ('2956985', '071',  'JASWINDER'),
-  ('2957033', '073',  'GURDEEP SINGH'),
-  ('2957124', '101',  'AMRITPAL SIDHU'),
-  ('2957140', '1012', 'CHARJIT SINGH'),
-  ('2957165', '1013', 'GURJIT SINGH'),
-  ('2957181', '1016', 'JUGRAJ SINGH SAMRA'),
-  ('2957199', '1017', 'GURWINDER D'),
-  ('2957215', '1019', 'SIMRAN'),
-  ('2957322', '1022', 'MOHINDER'),
-  ('2957447', '1023', 'PARVINDER')
-) AS pairing(card_number, unit_number, display_name)
-JOIN fuel_cards fc ON fc.card_number = pairing.card_number
-JOIN trucks t ON t.unit_number = pairing.unit_number
+  ('NAVJOT',             '072'),
+  ('ADITYA',             '031'),
+  ('AMRIT DHILLION',     '039'),
+  ('LOVEPREET SINGH',    '041'),
+  ('DHNESH KUMAR',       '044'),
+  ('JATINDER',           '047'),
+  ('RAVINDER',           '050'),
+  ('RAJVEER RANA',       '051'),
+  ('HARINDER GREWAL',    '052'),
+  ('RAJVEER GILL',       '057'),
+  ('AMRINDER BATH',      '061'),
+  ('NARINDER NINDA',     '063'),
+  ('NARESH KUMAR',       '064'),
+  ('TARSEM SINGH',       '065'),
+  ('HARPAL SUMRA',       '066'),
+  ('DHARMINDER',         '069'),
+  ('KULWANT SINGH BAL',  '070'),
+  ('JASWINDER',          '071'),
+  ('GURDEEP SINGH',      '073'),
+  ('AMRITPAL SIDHU',     '101'),
+  ('CHARJIT SINGH',      '1012'),
+  ('GURJIT SINGH',       '1013'),
+  ('JUGRAJ SINGH SAMRA', '1016'),
+  ('GURWINDER D',        '1017'),
+  ('SIMRAN',             '1019'),
+  ('MOHINDER',           '1022'),
+  ('PARVINDER',          '1023')
+) AS pairing(display_name, unit_number)
 JOIN drivers d ON d.display_name = pairing.display_name
+JOIN trucks t ON t.unit_number = pairing.unit_number
 ON CONFLICT DO NOTHING;

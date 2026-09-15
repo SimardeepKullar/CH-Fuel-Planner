@@ -81,24 +81,6 @@ export const SCHEMA: readonly TableDescriptor[] = [
     ],
   },
   {
-    name: "card_assignments",
-    columns: [
-      uuidPk(),
-      col("card_id", "uuid"),
-      col("truck_id", "uuid"),
-      col("driver_id", "uuid"),
-      col("effective_from", "date"),
-      col("effective_to", "date", true),
-      createdAt(),
-    ],
-    checks: [
-      "CHECK (((effective_to IS NULL) OR (effective_to >= effective_from)))",
-      // EXCLUDE USING gist (card_id WITH =, daterange(...) WITH &&) also
-      // guards this table but is contype 'x', not 'c' — the drift query only
-      // reads CHECK constraints, same limitation as every other table here.
-    ],
-  },
-  {
     name: "driver_aliases",
     columns: [
       col("alias_normalized", "text"),
@@ -148,11 +130,17 @@ export const SCHEMA: readonly TableDescriptor[] = [
       uuidPk(),
       t("card_number"),
       t("supplier", false, "'BVD'::text"),
+      col("driver_id", "uuid", true),
       t("status", false, "'active'::text"),
       createdAt(),
     ],
     checks: [
       "CHECK ((status = ANY (ARRAY['active'::text, 'inactive'::text])))",
+      // fuel_cards_one_active_per_driver (a partial UNIQUE index guarding at
+      // most one active card per driver) also lives on this table. A bare
+      // CREATE UNIQUE INDEX registers no pg_constraint row at all, so the
+      // drift query — which reads pg_constraint — can't see it, same as
+      // truck_profiles_owner_slug above.
     ],
   },
   {
@@ -255,11 +243,28 @@ export const SCHEMA: readonly TableDescriptor[] = [
     ],
   },
   {
+    name: "truck_assignments",
+    columns: [
+      uuidPk(),
+      col("driver_id", "uuid"),
+      col("truck_id", "uuid"),
+      col("effective_from", "date"),
+      col("effective_to", "date", true),
+      createdAt(),
+    ],
+    checks: [
+      "CHECK (((effective_to IS NULL) OR (effective_to >= effective_from)))",
+      // EXCLUDE USING gist (driver_id WITH =, daterange(...) WITH &&) also
+      // guards this table but is contype 'x', not 'c' — the drift query only
+      // reads CHECK constraints, same limitation as every other table here.
+    ],
+  },
+  {
     name: "trucks",
     columns: [
       uuidPk(),
       // Text, never integer: '072' and '1012' coexist and the leading zero
-      // is meaningful (D6).
+      // is meaningful (D18, which supersedes D6).
       t("unit_number"),
       col("truck_profile_id", "uuid", true),
       createdAt(),

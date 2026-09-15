@@ -66,10 +66,10 @@ describe.skipIf(!hasDatabase)("0003_actuals.sql (integration)", () => {
     return id;
   }
 
-  async function insertCard(cardNumber: string): Promise<string> {
+  async function insertCard(cardNumber: string, driverId?: string): Promise<string> {
     const { rows } = await scopedPool.query<{ id: string }>(
-      `INSERT INTO fuel_cards (card_number) VALUES ($1) RETURNING id`,
-      [cardNumber],
+      `INSERT INTO fuel_cards (card_number, driver_id) VALUES ($1, $2) RETURNING id`,
+      [cardNumber, driverId ?? null],
     );
     const id = rows[0]?.id;
     if (!id) throw new Error("insertCard failed");
@@ -84,42 +84,52 @@ describe.skipIf(!hasDatabase)("0003_actuals.sql (integration)", () => {
     expect(rows[0]?.unit_number).toBe("099");
   });
 
-  it("rejects two overlapping assignments for one card", async () => {
-    const cardId = await insertCard("C1");
-    const truckId = await insertTruck("T1");
-    const driverA = await insertDriver("DRIVER A");
-    const driverB = await insertDriver("DRIVER B");
+  it("rejects two overlapping truck assignments for one driver", async () => {
+    const driverId = await insertDriver("DRIVER A");
+    const truckA = await insertTruck("T1");
+    const truckB = await insertTruck("T2");
 
     await scopedPool.query(
-      `INSERT INTO card_assignments (card_id, truck_id, driver_id, effective_from, effective_to)
-       VALUES ($1, $2, $3, '2026-01-01', NULL)`,
-      [cardId, truckId, driverA],
+      `INSERT INTO truck_assignments (driver_id, truck_id, effective_from, effective_to)
+       VALUES ($1, $2, '2026-01-01', NULL)`,
+      [driverId, truckA],
     );
 
     await expect(
       scopedPool.query(
-        `INSERT INTO card_assignments (card_id, truck_id, driver_id, effective_from, effective_to)
-         VALUES ($1, $2, $3, '2026-03-01', NULL)`,
-        [cardId, truckId, driverB],
+        `INSERT INTO truck_assignments (driver_id, truck_id, effective_from, effective_to)
+         VALUES ($1, $2, '2026-03-01', NULL)`,
+        [driverId, truckB],
       ),
     ).rejects.toThrow();
   });
 
   it("accepts effective_to = NULL as meaning current", async () => {
-    const cardId = await insertCard("C2");
-    const truckId = await insertTruck("T2");
     const driverId = await insertDriver("DRIVER C");
+    const truckId = await insertTruck("T3");
 
     await scopedPool.query(
-      `INSERT INTO card_assignments (card_id, truck_id, driver_id, effective_from, effective_to)
-       VALUES ($1, $2, $3, '2026-01-01', NULL)`,
-      [cardId, truckId, driverId],
+      `INSERT INTO truck_assignments (driver_id, truck_id, effective_from, effective_to)
+       VALUES ($1, $2, '2026-01-01', NULL)`,
+      [driverId, truckId],
     );
     const { rows } = await scopedPool.query<{ effective_to: Date | null }>(
-      `SELECT effective_to FROM card_assignments WHERE card_id = $1`,
-      [cardId],
+      `SELECT effective_to FROM truck_assignments WHERE driver_id = $1`,
+      [driverId],
     );
     expect(rows[0]?.effective_to).toBeNull();
+  });
+
+  it("rejects a second active card for one driver, but allows an inactive one alongside a new active one", async () => {
+    const driverId = await insertDriver("DRIVER CARD OWNER");
+    await insertCard("CARDONE", driverId);
+
+    await expect(insertCard("CARDTWO", driverId)).rejects.toThrow();
+
+    await scopedPool.query(
+      `UPDATE fuel_cards SET status = 'inactive' WHERE card_number = 'CARDONE'`,
+    );
+    await expect(insertCard("CARDTHREE", driverId)).resolves.toBeTruthy();
   });
 
   it("rejects a duplicate spelling of one alias, unique on alias_normalized", async () => {

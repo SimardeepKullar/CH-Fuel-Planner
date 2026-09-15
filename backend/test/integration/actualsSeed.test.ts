@@ -34,28 +34,32 @@ describe.skipIf(!hasDatabase)("0004_actuals_seed.sql (integration)", () => {
     const { rows } = await scopedPool.query<{
       drivers: string;
       cards: string;
+      cards_with_driver: string;
       trucks: string;
       current_assignments: string;
     }>(
       `SELECT (SELECT count(*) FROM drivers) AS drivers,
               (SELECT count(*) FROM fuel_cards) AS cards,
+              (SELECT count(*) FROM fuel_cards WHERE driver_id IS NOT NULL) AS cards_with_driver,
               (SELECT count(*) FROM trucks) AS trucks,
-              (SELECT count(*) FROM card_assignments WHERE effective_to IS NULL) AS current_assignments`,
+              (SELECT count(*) FROM truck_assignments WHERE effective_to IS NULL) AS current_assignments`,
     );
     const row = rows[0];
     if (!row) throw new Error("count query returned no rows");
     return {
       drivers: Number(row.drivers),
       cards: Number(row.cards),
+      cardsWithDriver: Number(row.cards_with_driver),
       trucks: Number(row.trucks),
       currentAssignments: Number(row.current_assignments),
     };
   }
 
-  it("seeds 27 drivers, 27 cards, 27 trucks and 27 current assignments", async () => {
+  it("seeds 27 drivers, 27 cards (each with its driver) and 27 trucks with 27 current truck assignments", async () => {
     expect(await counts()).toEqual({
       drivers: 27,
       cards: 27,
+      cardsWithDriver: 27,
       trucks: 27,
       currentAssignments: 27,
     });
@@ -76,10 +80,10 @@ describe.skipIf(!hasDatabase)("0004_actuals_seed.sql (integration)", () => {
       display_name: string;
     }>(
       `SELECT t.unit_number, d.display_name
-         FROM card_assignments ca
-         JOIN fuel_cards fc ON fc.id = ca.card_id
-         JOIN trucks t ON t.id = ca.truck_id
-         JOIN drivers d ON d.id = ca.driver_id
+         FROM fuel_cards fc
+         JOIN drivers d ON d.id = fc.driver_id
+         JOIN truck_assignments ta ON ta.driver_id = d.id AND ta.effective_to IS NULL
+         JOIN trucks t ON t.id = ta.truck_id
         WHERE fc.card_number = '2956373'`,
     );
     expect(rows[0]).toEqual({ unit_number: "072", display_name: "NAVJOT" });

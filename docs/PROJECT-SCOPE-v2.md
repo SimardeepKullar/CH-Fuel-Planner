@@ -121,7 +121,7 @@ From the invoice side (new):
 3. **Billed price per gallon is the headline metric. Discount is subordinate everywhere.** Discount is retail minus billed, and retail is whatever the pump posted that day, so a big discount can mean a bad price. Real case from 999210: AMRIT DHILLION paid **5.1511** with a $0.9379 discount; LOVEPREET SINGH paid **5.8738** with a $0.3752 discount. The larger discount is the better deal only by coincidence.
 4. **Every list view must work with thousands of rows** and a real date-range picker — ten years of history is coming. Data volume is still modest (~3,000 fuel stops/year): design for readability and density, **not** virtualised million-row performance.
 5. **Billed price appears to be set per site per day.** Five drivers at LOVES #313 (Matthews MO, site 25334) on 9/7 and 9/9 were all billed 5.5208. That consistency means the invoice can be audited against BVD's published price file — the app needs a place to show a discrepancy when one is found.
-6. **Raw driver entry is unreliable.** Drivers type their unit number at the pump and it is frequently wrong: `0` entered on one stop and `072` on another by the same driver; unit `072` entered on two different cards the same day; unit `1012` entered by two different drivers. The app resolves the true truck **from the card assignment**, and shows both. Driver names on invoices are inconsistent free text and need an alias list.
+6. **Raw driver entry is unreliable.** Drivers type their unit number at the pump and it is frequently wrong: `0` entered on one stop and `072` on another by the same driver; unit `072` entered on two different cards the same day; unit `1012` entered by two different drivers. The app resolves the true truck **from the card's driver and that driver's truck assignment** (D19), and shows both. Driver names on invoices are inconsistent free text and need an alias list.
 
 ---
 
@@ -214,7 +214,7 @@ Both are realised in `CH Fuel App.dc.html` and must be reused by every screen th
 
 | State | Treatment |
 |---|---|
-| Resolved (from the card assignment / alias table) | Solid ink, body font, semibold. |
+| Resolved (from the card's driver, the driver's truck assignment, or the alias table) | Solid ink, body font, semibold. |
 | Raw, as entered at the pump / as printed on the invoice | Monospace, muted, **dotted underline**. |
 | The two disagree | Both inside an amber-bordered cell: resolved value in ink, raw value in amber monospace prefixed `≠`. Also emits an anomaly flag. |
 
@@ -229,7 +229,7 @@ Consistent treatment across table, detail and overview. **Two severity levels at
 | Rule | Example from 999210 | Severity |
 |---|---|---|
 | Sub-1-gallon transaction | 0.04 gal, $0.20, LOVES #277 Prescott AR | red |
-| Entered unit ≠ card's assigned truck | `0` entered on card 2956373 (truck 072) | amber |
+| Entered unit ≠ driver's assigned truck | `0` entered on card 2956373, NAVJOT's assigned truck 072 | amber |
 | Two fills too close in time or distance to be plausible | same site, 78 minutes apart | amber |
 | Billed price materially above BVD's published price for that site and date | — (needs the price-file audit, A6.5) | red |
 | DEF ratio well outside normal | 8.8% of diesel gallons against a ~3% norm | amber |
@@ -250,8 +250,8 @@ Additive to v1 §12. Same rules: `uuid` for URL-exposed rows, composite natural 
 | `drivers` | `uuid`, `display_name`, `status`. |
 | `driver_aliases` | `(alias_normalized)` unique, → `driver_id`, `source`, `confirmed_at`. Invoice names are free text; this is the join. |
 | `trucks` | `unit_number` **text** — see D18, which supersedes D6. → optional `truck_profile_id` from v1 §16. **Reconciles v1's `truck_profiles.truck_number` placeholder with the real roster** (031…1023). |
-| `fuel_cards` | `card_number` unique, `supplier`, `status`. 27 active. |
-| `card_assignments` | `(card_id, truck_id, driver_id, effective_from, effective_to)`. **Effective-dated** — a reassignment must not retroactively change how past transactions resolve. |
+| `fuel_cards` | `card_number` unique, `supplier`, → `driver_id` (nullable, **permanent 1:1 — see D19**, not effective-dated), `status`. 27 active. |
+| `truck_assignments` | `(driver_id, truck_id, effective_from, effective_to)`. **Effective-dated** — a truck reassignment (e.g. a repair swap) must not retroactively change how past transactions resolve. Supersedes the original `card_assignments` design (D19); the card/driver link moved to `fuel_cards.driver_id` because it doesn't share the truck's cadence of change. |
 
 **Invoice layer**
 
@@ -352,6 +352,7 @@ Exclusions are named, not hidden: split fills with no single planned stop to mat
 | **D16** | **Anomaly thresholds are data, not constants.** | Every threshold in A10 is a guess until real history is loaded. |
 | **D17** | **The Receipt Queue is built as an exceptions queue from day one.** | A18 Q3 may automate the check; the layout must not assume every item needs a decision. |
 | **D18** | **`unit_number` is `text`, stored exactly as the fleet writes it. Supersedes D6.** | D6 chose `integer` with a three-digit display pad on the evidence of `022`-style numbers. The real roster (A19) runs `031`…`073` **and** `101`, `1012`…`1023`. A three-digit pad cannot render a four-digit unit, and `integer` loses the leading zero that distinguishes `031` from `31` on the invoice. `formatUnitNumber()` survives as a validator and normaliser, not a padder. |
+| **D19** | **`fuel_cards.driver_id` is a permanent, direct link — not effective-dated.** A separate `truck_assignments(driver_id, truck_id, effective_from, effective_to)` carries the history that actually changes. | Cards are issued one-to-one to a driver and never reassigned; a lost card becomes a new `card_number`, not a repointed `driver_id`. Trucks are what occasionally change (a repair swap), so that's the relationship that needs a date range. Bundling both into one `card_assignments` row (the original A11 design) would have forced a full new row — repeating the unchanged card/driver link — every time dispatch moved a driver to a different truck. |
 
 ---
 

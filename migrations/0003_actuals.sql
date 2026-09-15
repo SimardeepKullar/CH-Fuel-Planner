@@ -2,8 +2,9 @@
 -- to 0001_init.sql / 0002_seed.sql, which have applied and are never edited
 -- (A16). See PROJECT-SCOPE-v2.md §A11 for the target design this mirrors.
 
--- Needed for card_assignments' EXCLUDE constraint below: it compares card_id
--- with '=' inside a GiST index, which plain btree-only equality can't do.
+-- Needed for truck_assignments' EXCLUDE constraint below: it compares
+-- driver_id with '=' inside a GiST index, which plain btree-only equality
+-- can't do.
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 -- ─── Reference layer (shared by both halves) ────────────────────────────
@@ -29,7 +30,7 @@ CREATE TABLE driver_aliases (
 
 -- Reconciles v1's truck_profiles.truck_number placeholder with the real
 -- fleet roster (A16). unit_number is text, never integer: '072' and '1012'
--- coexist and the leading zero is meaningful (D6).
+-- coexist and the leading zero is meaningful (D18, which supersedes D6).
 CREATE TABLE trucks (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   unit_number       text NOT NULL UNIQUE,
@@ -37,36 +38,46 @@ CREATE TABLE trucks (
   created_at        timestamptz NOT NULL DEFAULT now()
 );
 
+-- A card is permanently 1:1 with a driver — it does not get reassigned
+-- between drivers. A lost card is a new row (new card_number), never a
+-- repointed driver_id on the old one, so this link needs no date range.
 CREATE TABLE fuel_cards (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   card_number text NOT NULL UNIQUE,
   supplier    text NOT NULL DEFAULT 'BVD',
+  driver_id   uuid REFERENCES drivers(id),
   status      text NOT NULL DEFAULT 'active'
                 CHECK (status IN ('active','inactive')),
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
--- Effective-dated: a reassignment must not retroactively change how past
--- transactions resolve. effective_to = NULL means "current". The EXCLUDE
--- constraint is the overlap guard — one card cannot have two assignments
--- whose date ranges intersect, enforced by the database, not application code.
-CREATE TABLE card_assignments (
+-- At most one active card per driver at a time; a replaced card is
+-- deactivated, not deleted, so its history stays attached to the driver.
+CREATE UNIQUE INDEX fuel_cards_one_active_per_driver ON fuel_cards (driver_id)
+  WHERE status = 'active' AND driver_id IS NOT NULL;
+
+-- Effective-dated: a truck reassignment (e.g. a repair swap) must not
+-- retroactively change how past transactions resolve. effective_to = NULL
+-- means "current". The EXCLUDE constraint is the overlap guard — one driver
+-- cannot be in two trucks at once, enforced by the database, not application
+-- code. Keyed on driver_id, not card_id: the card is permanent (fuel_cards
+-- above), the truck is what occasionally changes.
+CREATE TABLE truck_assignments (
   id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  card_id        uuid NOT NULL REFERENCES fuel_cards(id),
-  truck_id       uuid NOT NULL REFERENCES trucks(id),
   driver_id      uuid NOT NULL REFERENCES drivers(id),
+  truck_id       uuid NOT NULL REFERENCES trucks(id),
   effective_from date NOT NULL,
   effective_to   date,
   created_at     timestamptz NOT NULL DEFAULT now(),
 
   CHECK (effective_to IS NULL OR effective_to >= effective_from),
   EXCLUDE USING gist (
-    card_id WITH =,
+    driver_id WITH =,
     daterange(effective_from, effective_to, '[]') WITH &&
   )
 );
 
-CREATE INDEX card_assignments_card ON card_assignments (card_id, effective_from);
+CREATE INDEX truck_assignments_driver ON truck_assignments (driver_id, effective_from);
 
 -- ─── Invoice layer ───────────────────────────────────────────────────────
 
@@ -100,8 +111,9 @@ CREATE TABLE invoice_totals (
 
 -- One row per base auth code (a "fuel stop"); the product lines that make up
 -- its total live in fuel_stop_lines. unit_raw / driver_name_raw are what the
--- driver actually entered; truck_id / driver_id are resolved from the card
--- assignment and may be null when resolution fails (T-29).
+-- driver actually entered; driver_id resolves from the card (fuel_cards.
+-- driver_id) and truck_id from that driver's truck_assignments — both may be
+-- null when resolution fails (T-29).
 CREATE TABLE fuel_stops (
   id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   invoice_id      uuid NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,

@@ -329,7 +329,7 @@ export interface DriverAliasRow {
 
 export interface TruckRow {
   id: string;
-  /** Text, never integer — '072' and '1012' coexist (D6). */
+  /** Text, never integer — '072' and '1012' coexist (D18, supersedes D6). */
   unit_number: string;
   truck_profile_id: string | null;
   created_at: Date;
@@ -339,15 +339,16 @@ export interface FuelCardRow {
   id: string;
   card_number: string;
   supplier: string;
+  /** Permanent 1:1 with a driver — a lost card is a new row, not a reassignment. */
+  driver_id: string | null;
   status: PersonCardStatus;
   created_at: Date;
 }
 
-export interface CardAssignmentRow {
+export interface TruckAssignmentRow {
   id: string;
-  card_id: string;
-  truck_id: string;
   driver_id: string;
+  truck_id: string;
   effective_from: Date;
   /** Null means current. */
   effective_to: Date | null;
