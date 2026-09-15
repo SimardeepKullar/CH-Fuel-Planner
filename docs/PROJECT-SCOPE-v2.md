@@ -1,0 +1,433 @@
+# CH Fuel App — Project scope, v2 (merge addendum)
+
+**Document version:** 2.0 — 14 September 2026
+**Organisation:** 2043733 Ontario Inc., DBA CH Logistics · 5 Matagami Street, Brampton ON
+**Relationship to v1:** this document **extends** `PROJECT-SCOPE.md` (v1.0, the Fuel Planner scope). v1 sections stay in force unless a section below supersedes them. Where the two disagree, **v2 wins and v1 gets edited** — same rule v1 applies to its own migrations.
+
+Section numbers are prefixed `A` (A1, A2 …) so they never collide with v1's §1–§23. Cross-references to v1 keep the plain `§` form.
+
+---
+
+## Table of contents
+
+- [A1. What the merged app does](#a1-what-the-merged-app-does)
+- [A2. Users](#a2-users)
+- [A3. Where the build stands](#a3-where-the-build-stands)
+- [A4. Scope boundaries for v2](#a4-scope-boundaries-for-v2)
+- [A5. The invoice data](#a5-the-invoice-data)
+- [A6. Domain rules the design must respect](#a6-domain-rules-the-design-must-respect)
+- [A7. Information architecture](#a7-information-architecture)
+- [A8. Screens](#a8-screens)
+- [A9. Two conventions established by the design](#a9-two-conventions-established-by-the-design)
+- [A10. Anomaly flags](#a10-anomaly-flags)
+- [A11. Schema additions](#a11-schema-additions)
+- [A12. Service boundaries](#a12-service-boundaries)
+- [A13. API additions](#a13-api-additions)
+- [A14. Plan vs Actual matching](#a14-plan-vs-actual-matching)
+- [A15. Decisions locked for v2](#a15-decisions-locked-for-v2)
+- [A16. Amendments to v1 tickets](#a16-amendments-to-v1-tickets)
+- [A17. Non-goals](#a17-non-goals)
+- [A18. Open questions](#a18-open-questions)
+- [A19. Reference data for fixtures](#a19-reference-data-for-fixtures)
+
+---
+
+## A1. What the merged app does
+
+One internal web app that **plans where trucks should refuel, then measures what they actually paid** — closing the loop between recommendation and receipt.
+
+- **Plan** (v1, forward-looking): route in, cheapest compliant Love's stops out, driver link.
+- **Actuals** (v2, backward-looking): weekly BVD invoice in, every transaction / driver / truck / station / express charge recorded and reported on.
+- **Shared reference layer**: trucks, drivers, fuel cards, Love's stations — single tables used by both halves. This is the whole reason for merging.
+- **Plan vs Actual**: the payoff screen. Recommended stops and expected prices against the stops actually made and their billed prices, with the delta in dollars.
+
+---
+
+## A2. Users
+
+| Role | Reality |
+|---|---|
+| **Dispatcher** (primary) | Also the developer building this. Plans routes, reviews invoices, checks receipt compliance. Uses it constantly. |
+| **Management** (secondary) | Wants spend and compliance summaries. Read-mostly. |
+| **Admin** (possible) | Data entry, alias cleanup. |
+| **Drivers** | **Not users.** No login. They receive a read-only shared link for their fuel plan. |
+| **Customers** | Never see this app. The public marketing website is a separate product sharing nothing but brand. |
+
+Internal tool for a handful of named people, not multi-tenant SaaS. Do not design onboarding for strangers. Single-user auth today (v1 T-05, Auth.js credentials, JWT sessions per D7), with room for a small team later — **no elaborate roles UI**.
+
+---
+
+## A3. Where the build stands
+
+Verified 14 September 2026.
+
+| Ticket | State |
+|---|---|
+| T-01 … T-10 | **Complete, merged to `main` in `CH-Fuel-Planner`.** Toolchain + CI + hooks; rewritten schema + drift test; seed data (3 truck profiles, gazetteer, 1 user, 1 product code); Next.js/TS migration; `@ch/core` build boundary; auth + login; BVD price-sheet ingest + backfill (30 January dates + August sheet); station resolution 605/605; ORS adapter + budget guard + both meters. |
+| T-11 … T-24 | Specified in `TICKETS.md`, **not built.** Corridor query, optimiser, validation loop, detour costing, geocoding, plan endpoints, disclaimers, read endpoints, `sentToDriver`, frontend client, MapLibre, UI states, deploy. T-20 deferred (§17). |
+| T-25 … T-48 | **New in v2.** `TICKETS-v2.md`. |
+
+The frontend today is the v1 three-tab shell (Plan / Recent / Dev Tools) plus a Metrics tab in the design package. v2 replaces that shell with the sidebar IA in A7 — see A16.
+
+---
+
+## A4. Scope boundaries for v2
+
+**In scope**
+
+- Weekly BVD invoice import (Excel primary, PDF fallback), with reconciliation and a quarantine state.
+- Transactions, transaction detail, receipt queue, other charges.
+- Drivers, trucks, stations analysis keyed on the shared reference layer.
+- Plan vs Actual — live (current invoice) and historical backtest.
+- Card→truck→driver assignments with effective dates; driver name aliases; anomaly thresholds.
+- Ten years of historical invoices backfilled from Gmail, eventually (A19, T-47).
+
+**Out of scope** — see A17.
+
+---
+
+## A5. The invoice data
+
+Measured against invoice **999210** (period 2026-09-03 → 2026-09-09, invoice-dated 2026-09-10, due 2026-09-11; BVD Petroleum, 130 Delta Park Blvd, Brampton ON).
+
+| Figure | Value |
+|---|---|
+| Active fuel cards | 27 |
+| Fuel stops in the week | ~60 |
+| Diesel (TA) | 8,733.11 gal / $48,450.68 |
+| DEF (DF) | 174.43 gal / $845.40 |
+| Scale (S) | $90.50 |
+| Express | $1,543.13 |
+| **Grand total** | **$50,929.71 USD** |
+| Discount captured | $5,088.61 ($0.58/gal average) |
+| Average billed price | $5.55/gal |
+| Receipt compliance | 48 of 60 confirmed |
+| Anomalies flagged | 3 |
+
+**Shape.** Invoices are weekly. Every amount is USD. A fuel stop is a group of product lines sharing a **base auth code** — the legacy Google Sheet recorded only the diesel line and silently dropped DEF ($36.78 on one stop alone), which is the single most important reason this half exists. Express charges sit in a separate section with a different shape and were entirely absent from the spreadsheet despite being $1,543.13 in one week. Every express code carries a flat **$3.00** fee.
+
+**Product codes.** `TA` tractor diesel · `DF` DEF · `S` scale · `TF` trailer · `AD` additive · `O` oil · `L` lubricant · `C` cash. Same tripwire rule as v1 §11.1: **an unmapped code fails its row**, never default-maps.
+
+---
+
+## A6. Domain rules the design must respect
+
+From the planning side (v1 §5, unchanged): hard **500-mile cap** and **300-mile floor** between fills (the floor relaxes with a `MIN_LEG_RELAXED` disclaimer; there is **no floor on the final leg**); US trips start at 100% fuel because drivers fill before the border; Love's only; typical problem size 1–4 stops from tens of candidates.
+
+From the invoice side (new):
+
+1. **Currency is always visible.** USD marker on every money column header or value. Never a bare `$`.
+2. **Number formatting.** Gallons 2dp · per-gallon prices **4dp** (`5.2395`) · money 2dp. Right-align all numerics, tabular figures. The 4dp-beside-2dp collision is a real layout constraint, solved in the design file by giving billed $/gal its own column and its own type size.
+3. **Billed price per gallon is the headline metric. Discount is subordinate everywhere.** Discount is retail minus billed, and retail is whatever the pump posted that day, so a big discount can mean a bad price. Real case from 999210: AMRIT DHILLION paid **5.1511** with a $0.9379 discount; LOVEPREET SINGH paid **5.8738** with a $0.3752 discount. The larger discount is the better deal only by coincidence.
+4. **Every list view must work with thousands of rows** and a real date-range picker — ten years of history is coming. Data volume is still modest (~3,000 fuel stops/year): design for readability and density, **not** virtualised million-row performance.
+5. **Billed price appears to be set per site per day.** Five drivers at LOVES #313 (Matthews MO, site 25334) on 9/7 and 9/9 were all billed 5.5208. That consistency means the invoice can be audited against BVD's published price file — the app needs a place to show a discrepancy when one is found.
+6. **Raw driver entry is unreliable.** Drivers type their unit number at the pump and it is frequently wrong: `0` entered on one stop and `072` on another by the same driver; unit `072` entered on two different cards the same day; unit `1012` entered by two different drivers. The app resolves the true truck **from the card assignment**, and shows both. Driver names on invoices are inconsistent free text and need an alias list.
+
+---
+
+## A7. Information architecture
+
+Persistent left sidebar, three groups plus Settings. Supersedes v1's tab bar.
+
+```
+PLAN
+  New Plan
+  Plans
+
+ACTUALS
+  Overview
+  Transactions
+  Receipt Queue        [badge: count pending]
+  Other Charges
+  Import
+
+ANALYSIS
+  Drivers
+  Trucks
+  Stations
+  Plan vs Actual
+
+  Settings
+```
+
+Top bar carries a **global invoice-period selector** (default: most recent invoice) that governs Actuals and Analysis. **Plan screens ignore it** and show their own price-sheet date instead — the design file hides the selector on Plan screens and swaps in the plan's own context tags.
+
+The shell must tolerate a larger navigation structure later (A18 Q4).
+
+---
+
+## A8. Screens
+
+Numbered to match the design brief. The design file `CH Fuel App.dc.html` already realises A8.3, A8.10, and both Plan screens; the rest are specified here and ticketed from T-40.
+
+### A8.1 Overview
+Landing screen. Answers "how did last week go" in five seconds. KPI cards for the selected period using the A5 figures: total spend, diesel gal/$, **average billed price (headline)**, discount captured (subordinate), DEF, other charges, receipt compliance, anomalies flagged. Below: billed-price-per-gallon trend across recent periods, top-spend-by-driver bars, and a compact anomalies list linking into Transactions.
+
+### A8.2 Import
+Drag-and-drop for the BVD Excel export; PDF is a fallback path. Three states designed carefully:
+1. **Parsing** — progress, file name, row/page count.
+2. **Reconciliation passed** — preview of what will be written, with the balance check shown explicitly: parsed rows sum to the printed grand total per product code (TA + DF + S + Express = $50,929.71). Confirm writes.
+3. **Reconciliation failed → quarantined** — a **full screen**, not a toast. Which product code failed, expected vs parsed, the offending rows. **Nothing is written.** The user must be able to decide whether to fix the file or report a BVD issue.
+
+Plus a history list: invoice number, period, total, status, imported-at. Duplicate uploads of the same file are rejected with a designed message.
+
+### A8.3 Transactions — *realised in the design file*
+The workhorse. Dense, filterable, sortable. Columns: date/time, card, driver, truck, station (Love's number + city + state), gallons, **billed $/gal**, retail $/gal, total, receipt status, flags. Filters: date range, driver, truck, card, state, product type, receipt status, anomaly-only. One row per fuel stop grouped by base auth code; expanding reveals product lines with an unmissable **stop total**. Prioritise scannability and keyboard use over decoration.
+
+### A8.4 Transaction detail
+Full record: all product lines, station with map pin, card and its assigned truck and driver, raw entered values, receipt status with who checked and when, anomaly flags, link to the source invoice, and — when a plan covered this date and truck — a link to that plan.
+
+### A8.5 Receipt Queue
+The only write-heavy screen; optimise hard. Today it is manual: open Samsara, check whether the driver uploaded a receipt photo, type Y/N in a spreadsheet. Design a focused queue: one unconfirmed transaction at a time with enough context to search Samsara, Y/N/skip on keyboard shortcuts, progress (12 of 60), batch confirm for a driver who uploaded everything. **Must survive automation** — if Samsara's API exposes driver documents this becomes a review-exceptions queue, so the layout must not assume every item needs a human decision. **Must work well on a phone.**
+
+### A8.6 Other Charges
+Express codes: lumper fees, repairs, scale charges. Columns: date, express code, tractor, driver, amount, fee, total, payee, notes, category. Two quirks: some rows have **no driver name at all** (tractor 073, $200.00 + $3.00 = $203.00, note "lumper"), and driver names here are free text with inconsistent casing that will not always match a driver record — **show unmatched as unmatched rather than guessing**. Surface the $3.00 fee total separately.
+
+### A8.7 Drivers
+List: spend, gallons, average billed $/gal, receipt compliance %, anomaly count for the period. Detail: their average billed price against fleet average, transaction history, compliance over time, favoured stations, and **DEF-to-diesel gallon ratio** (an outlier can indicate misuse). Aliases live in Settings, not here.
+
+### A8.8 Trucks
+Same structure keyed on truck number, plus which card is assigned and **the history of that assignment** — a reassignment changes how past transactions resolve.
+
+### A8.9 Stations
+Love's locations reusing the v1 map treatment (MapLibre + OpenFreeMap, T-22). List and map views. Detail shows **billed price history at that site** and has a place to show a price discrepancy against BVD's published file (A6.5).
+
+### A8.10 Plan vs Actual — *realised in the design file*
+Two views behind one segmented control:
+- **Live performance** — for the selected invoice period: recommended stops and expected prices against actual stops and billed prices, the dollar delta, skipped recommendations and unplanned stops, plan adherence, by-truck variance, needs-review list, flagged deviations.
+- **Historical backtest** — past invoices re-solved against the archived BVD price file. Needs no plan, so it works over the full ten years of history once backfilled.
+
+**The empty state is real and will persist** — plans and invoices only overlap once both halves run. Design it properly (the design file states the coverage explicitly: "14 of 60 stops covered by a plan").
+
+### A8.11 Settings
+Card→truck→driver assignments with effective dates. Driver name aliases. Anomaly thresholds. User management only if more than one person logs in.
+
+---
+
+## A9. Two conventions established by the design
+
+Both are realised in `CH Fuel App.dc.html` and must be reused by every screen that shows invoice data.
+
+**1. Billed dominant, discount subordinate.** Billed $/gal is the largest numeral in its row (14.5px condensed bold in the table, 4dp); retail is small and muted; discount is a 10px subline under billed, never coloured as a win, never given a KPI card more prominent than average billed price.
+
+**2. Raw versus resolved.** Three states, one vocabulary:
+
+| State | Treatment |
+|---|---|
+| Resolved (from the card assignment / alias table) | Solid ink, body font, semibold. |
+| Raw, as entered at the pump / as printed on the invoice | Monospace, muted, **dotted underline**. |
+| The two disagree | Both inside an amber-bordered cell: resolved value in ink, raw value in amber monospace prefixed `≠`. Also emits an anomaly flag. |
+
+A legend strip under the filters teaches the vocabulary once. Anywhere raw invoice text appears — transaction rows, detail panels, other charges, import previews — it wears the raw treatment.
+
+---
+
+## A10. Anomaly flags
+
+Consistent treatment across table, detail and overview. **Two severity levels at most** — *worth a look* (amber) and *probably a billing error* (red). Do not design five levels for a fleet this size.
+
+| Rule | Example from 999210 | Severity |
+|---|---|---|
+| Sub-1-gallon transaction | 0.04 gal, $0.20, LOVES #277 Prescott AR | red |
+| Entered unit ≠ card's assigned truck | `0` entered on card 2956373 (truck 072) | amber |
+| Two fills too close in time or distance to be plausible | same site, 78 minutes apart | amber |
+| Billed price materially above BVD's published price for that site and date | — (needs the price-file audit, A6.5) | red |
+| DEF ratio well outside normal | 8.8% of diesel gallons against a ~3% norm | amber |
+| Card with charges but no fuel | one card carried only a $15.25 scale charge | amber |
+
+Thresholds live in Settings, not in code constants.
+
+---
+
+## A11. Schema additions
+
+Additive to v1 §12. Same rules: `uuid` for URL-exposed rows, composite natural keys for reference tables, `_raw` kept beside `_normalized`, parameters only (D1), and the descriptor + drift test (T-02 step 2.4) extended to cover every new table.
+
+**Reference layer (shared by both halves)**
+
+| Table | Notes |
+|---|---|
+| `drivers` | `uuid`, `display_name`, `status`. |
+| `driver_aliases` | `(alias_normalized)` unique, → `driver_id`, `source`, `confirmed_at`. Invoice names are free text; this is the join. |
+| `trucks` | `unit_number` (text, zero-padded per D6), → optional `truck_profile_id` from v1 §16. **Reconciles v1's `truck_profiles.truck_number` placeholder with the real roster** (031…1023). |
+| `fuel_cards` | `card_number` unique, `supplier`, `status`. 27 active. |
+| `card_assignments` | `(card_id, truck_id, driver_id, effective_from, effective_to)`. **Effective-dated** — a reassignment must not retroactively change how past transactions resolve. |
+
+**Invoice layer**
+
+| Table | Notes |
+|---|---|
+| `invoices` | `invoice_number` unique, `period_start`, `period_end`, `invoice_date`, `due_date`, `grand_total_usd`, `status` (`quarantined` / `imported`), `file_sha256` unique, `imported_at`. |
+| `invoice_totals` | Per product code as printed: `(invoice_id, product_code, gallons, amount_usd)`. The reconciliation target. |
+| `fuel_stops` | `uuid`, → `invoice_id`, `base_auth_code`, `occurred_at`, → `card_id`, resolved `truck_id` / `driver_id`, **`unit_raw`**, **`driver_name_raw`**, → `station_id`, `total_usd`, `receipt_status`. |
+| `fuel_stop_lines` | `(fuel_stop_id, product_code, gallons, retail_usd_per_gal, billed_usd_per_gal, amount_usd)`. 4dp prices stored as `numeric(9,4)`. **Never** derive the stop total by summing only diesel. |
+| `express_charges` | `(invoice_id, express_code)`, `occurred_at`, `truck_id` + `unit_raw`, nullable `driver_id` + `driver_name_raw`, `amount_usd`, `fee_usd` (flat 3.00), `total_usd`, `payee`, `note`, `category`, `match_status`. |
+| `receipt_checks` | `(fuel_stop_id, checked_by, checked_at, outcome)` — append-only; the queue's audit trail. |
+| `anomalies` | `(subject_type, subject_id, rule, severity, detail jsonb, detected_at, dismissed_at)`. Thresholds read from settings, never hard-coded. |
+| `anomaly_thresholds` | Editable in Settings. |
+| `invoice_rejections` | Mirrors v1's `import_rejections`: line number, auth code, reason code. Written on quarantine. |
+| `plan_actual_matches` | `(plan_id, plan_stop_id nullable, fuel_stop_id nullable, kind)` where kind ∈ `matched` / `skipped_recommendation` / `unplanned_stop`, plus `delta_usd`. |
+
+**Extensions to existing tables**
+
+- `stations` — already carries `(supplier, site_ref)`, resolution tier and operator attrs from T-08/T-09. Invoice station text (`LOVES #294`, site 43673) resolves through the **same store-number parser** built in T-08 step 8.1. Do not write a second parser.
+- `plans` — no new columns. `dispatched_at` (T-19) is what Plan vs Actual matches against (A14).
+
+---
+
+## A12. Service boundaries
+
+Extends v1 §13. `backend/src/api/` stays framework-free; nothing below performs I/O except the services marked as such.
+
+```
+backend/src/
+  invoice/
+    parseInvoiceXlsx.ts     pure: bytes -> rows + header metadata
+    parseInvoicePdf.ts      pure: fallback path
+    groupByAuthCode.ts      pure: lines -> stops
+    reconcile.ts            pure: parsed rows vs printed totals -> balanced | imbalance report
+    importInvoice.ts        service: hash, dedupe, stage, reconcile, promote or quarantine
+  resolve/
+    resolveDriver.ts        pure: raw name + alias table -> driver | unmatched
+    resolveTruck.ts         pure: card + occurred_at + assignments -> truck; flags unit mismatch
+  anomaly/
+    rules/*.ts              pure, one file per A10 rule
+    runAnomalies.ts         service
+  actuals/
+    transactions.ts  overview.ts  receipts.ts  otherCharges.ts
+    drivers.ts  trucks.ts  stations.ts
+  planActual/
+    match.ts                pure: plan stops + fuel stops -> matches
+    backtest.ts             service: re-solve historical invoices on archived price files
+```
+
+`importInvoice.ts` does **no HTTP, reads no argv, prints nothing** — same rule as v1's `ingestFile`, which is what lets the upload route, the CLI and a future Gmail poller all be thin wrappers.
+
+---
+
+## A13. API additions
+
+Versioned under `/api/v1`, RFC 9457 errors, `?units=` honoured, numbers not strings, nulls preserved.
+
+| Method & path | Notes |
+|---|---|
+| `POST /invoices/import` | multipart. Returns `imported` with a write preview, or **`quarantined` with the imbalance report and offending rows** — a 200 with a status, not a 4xx: quarantine is an answer, not an error. Duplicate `file_sha256` → 409 problem+json. |
+| `GET /invoices` | List with period, total, status, imported-at. Paginated. |
+| `GET /invoices/{id}` | Header, printed totals, reconciliation result. |
+| `GET /transactions` | Filters (date range, driver, truck, card, state, product, receipt status, anomaly-only), sort, pagination. One row per stop; `lines[]` included on request. |
+| `GET /transactions/{id}` | A8.4's payload, including `rawValues` and `resolvedFrom`. |
+| `GET /overview?period=` | A8.1's KPI block + trend series + top-spend + anomaly digest. |
+| `GET /receipt-queue` · `POST /receipt-checks` · `POST /receipt-checks/batch` | Queue order, progress counts, one write per decision, append-only. |
+| `GET /express-charges` | Includes `matchStatus` and the fee total. |
+| `GET /drivers` · `/drivers/{id}` · `/trucks` · `/trucks/{id}` | Period rollups + detail series. |
+| `GET /stations/{id}/billed-prices` | Billed price history per site per day, with a `discrepancy` field against the published file when computable. |
+| `GET /plan-actual?period=` · `GET /plan-actual/backtest?from=&to=` | A14. |
+| `GET /settings/assignments` · `PUT` · `GET /settings/aliases` · `PUT` · `GET/PUT /settings/thresholds` | Effective-dated writes. |
+
+Every money field carries `currency: "USD"`. Every resolved field ships beside its raw twin: `{ "truck": {"resolved": "072", "raw": "0", "agrees": false} }`.
+
+---
+
+## A14. Plan vs Actual matching
+
+**Match against dispatched plans only** (`plans.dispatched_at IS NOT NULL`, written by T-19). Matching against every exploratory plan a dispatcher computed and discarded would manufacture false mismatches — this is the payoff v1 T-19 was scheduled for.
+
+Matching key: **truck + date window + station**. A recommended stop with no fuel stop within the window is a `skipped_recommendation`; a fuel stop with no recommendation is an `unplanned_stop`; both are first-class rows, not omissions. `delta_usd` on a matched pair is `(actual billed − planned expected) × actual gallons`.
+
+**Historical backtest** needs no plan: re-solve a past invoice's lane against the archived price file for that date and diff. This is the only part of the actuals half that can use the full ten-year history immediately, and it reuses `dp_v1` (T-12) unchanged — which is exactly why the optimiser is pure.
+
+Exclusions are named, not hidden: split fills with no single planned stop to match, station text that resolves to no listed site, and dates with no archived price file. The design file lists all three.
+
+---
+
+## A15. Decisions locked for v2
+
+| # | Decision | Rationale |
+|---|---|---|
+| **D11** | **One repository, one deployment.** The merged app ships from `CH-Fuel-Planner`; no second service. | The shared reference layer is a join, not an integration. Two services would need it in both. |
+| **D12** | **Quarantine is a persisted invoice row with `status='quarantined'` and zero child rows.** | The user must be able to come back to it. A toast loses the imbalance report. |
+| **D13** | **Excel is the primary import path; PDF is a fallback.** | The BVD export is the authoritative shape; PDF parsing is where balance failures come from. |
+| **D14** | **Resolution happens at import, stored, not computed per query.** Raw text is kept forever. | An assignment edit must re-resolve deliberately (a job), not silently change history on next read. |
+| **D15** | **Sidebar IA replaces the tab bar.** | Eleven destinations across three groups; tabs stopped scaling at four. Supersedes parts of T-04/T-21/T-23. |
+| **D16** | **Anomaly thresholds are data, not constants.** | Every threshold in A10 is a guess until real history is loaded. |
+| **D17** | **The Receipt Queue is built as an exceptions queue from day one.** | A18 Q3 may automate the check; the layout must not assume every item needs a decision. |
+
+---
+
+## A16. Amendments to v1 tickets
+
+These are edits to already-specified v1 tickets, not new tickets. Apply them when the ticket is picked up.
+
+- **T-02 (done)** — schema additions in A11 land as new migrations (`0003_actuals.sql` …), **not** by editing `0001_init.sql`, which has applied. The descriptor and drift test extend to every new table.
+- **T-03 (done)** — `truck_profiles.truck_number` placeholders (022/056/091) are superseded by the real roster in `trucks` (A11). Keep the profiles; stop treating their unit numbers as the roster.
+- **T-18** — `GET /health` gains latest-invoice-period alongside latest-sheet-date.
+- **T-21 / T-23** — build the **sidebar shell** (D15), not the tab bar. The `CH Fuel App.dc.html` design file is the reference; its Plan and Plans screens are the ported v1 Plan and Recent tabs and carry the v1 UI contract forward unchanged.
+- **T-19** — unchanged in code, but now load-bearing: it is the input to A14.
+- **T-24** — deployment gains the invoice-import path in the runbook; still no cron (T-20 deferred).
+
+---
+
+## A17. Non-goals
+
+- No customer, contact or deal management. This is not a CRM despite early framing.
+- No invoice payment or accounting integration.
+- No driver login.
+- No claims of truck-legal routing. The `GOOGLE_LINK_NOT_TRUCK_LEGAL` disclaimer (T-17) stays.
+- The public marketing website is a separate product.
+- No multi-tenancy, no roles matrix, no virtualised million-row grids.
+
+---
+
+## A18. Open questions
+
+Flagged, not solved. Each names what it blocks.
+
+| # | Question | Blocks |
+|---|---|---|
+| **Q1** | Does truck odometer data become available (Samsara or TransPlus)? If yes, **cost per mile becomes a headline metric** and the Trucks screen changes shape. | A8.8's final layout |
+| **Q2** | Is the company billed USD and converted by the bank, or billed CAD by BVD? Decides whether a **currency toggle** belongs in the top bar. | A6.1, top-bar design |
+| **Q3** | Does Samsara's API expose driver receipt uploads? If yes the Receipt Queue becomes an exceptions queue. | A8.5 scope (D17 hedges it) |
+| **Q4** | Does a future unified operations dashboard (TransPlus, Samsara, BorderConnect, Motive) absorb this app as a section? | Shell's tolerance for a larger nav (A7) |
+| **Q5** | Is BVD's published price file obtainable as a file, or only as the invoice? Decides whether the A6.5 price audit is real or aspirational. | A10's "billed above published" rule |
+| **Q6** | Ten years of Gmail invoices — are they all the same Excel shape, or do older years differ? | T-47 sizing |
+
+---
+
+## A19. Reference data for fixtures
+
+Use these real values instead of placeholders.
+
+**Drivers** NAVJOT · ADITYA · DHNESH KUMAR · JATINDER · RAVINDER · AMRIT DHILLION · RAJVEER RANA · HARINDER GREWAL · RAJVEER GILL · AMRINDER BATH · NARINDER NINDA · LOVEPREET SINGH · NARESH KUMAR · TARSEM SINGH · HARPAL SUMRA · DHARMINDER · KULWANT SINGH BAL · JASWINDER · GURDEEP SINGH · AMRITPAL SIDHU · CHARJIT SINGH · GURJIT SINGH · JUGRAJ SINGH SAMRA · GURWINDER D · SIMRAN · MOHINDER · PARVINDER
+
+**Cards** 2955805 · 2955961 · 2956043 · 2956290 · 2956373 · 2956381 · 2956407 · 2956639 · 2956670 · 2956696 · 2956704 · 2956787 · 2956811 · 2956894 · 2956936 · 2956951 · 2956985 · 2957033 · 2957082 · 2957124 · 2957140 · 2957165 · 2957181 · 2957199 · 2957215 · 2957322 · 2957447
+
+**Units** 031 · 039 · 041 · 044 · 047 · 050 · 051 · 052 · 057 · 061 · 063 · 064 · 065 · 066 · 069 · 070 · 071 · 072 · 073 · 101 · 1012 · 1013 · 1016 · 1017 · 1019 · 1022 · 1023
+
+**Stations** LOVES #294 Dallas TX (43673) · #313 Matthews MO (25334) · #833 Ripley NY (21186) · #341 Rolla MO (25919) · #688 Greenup IL (38070) · #883 Rural Hall NC (8279) · #275 Palestine AR (4150) · #884 Prescott AR (21236) · #456 Perrysburg OH (35193) · #731 Slippery Rock PA (36085) · #820 Waterloo NY (12198) · #518 Springville UT (45046) · #769 Topeka KS (19096)
+
+**Sample stops**
+
+| Date/time | Driver | Card | Station | Gal | Retail | Billed | Total |
+|---|---|---|---|---|---|---|---|
+| 2026-09-09 00:41 | NAVJOT | 2956373 | LOVES #294, Dallas TX | 41.67 | 5.9890 | 5.2395 | $218.35 |
+| 2026-09-03 11:39 | ADITYA | 2957082 | LOVES #307, Jackson GA | 243.95 | 5.7890 | 5.5090 | $1,343.93 |
+| 2026-09-07 19:45 | AMRIT DHILLION | 2956787 | LOVES #738, Sulphur Springs TX | 166.19 | 6.0890 | 5.1511 | $856.05 |
+| 2026-09-09 04:22 | LOVEPREET SINGH | 2956381 | LOVES #766, Atkinson IL | 182.45 | 6.2490 | 5.8738 | $1,071.65 |
+| 2026-09-03 05:35 | NAVJOT | 2956373 | LOVES #277, Prescott AR | 0.04 | 5.9890 | 5.5363 | $0.20 |
+
+**Worked stop expansion** — auth `A252014353`, NAVJOT, card 2956373, unit 072, 2026-09-09 00:41:38, LOVES #294 (site 43673) Dallas TX:
+
+```
+  TA  Diesel   41.67 gal   retail 5.9890   billed 5.2395   $218.35
+  DF  DEF       7.52 gal   retail 4.8890   billed 4.8890    $36.78
+                                            Stop total     $255.13
+```
+
+**Sample express codes**
+
+| Date | Code | Tractor | Driver | Amount | Fee | Total | Note |
+|---|---|---|---|---|---|---|---|
+| 2026-09-03 08:29 | 6552061 | 1019 | Gurjit | $240.35 | $3.00 | $243.35 | Lumper |
+| 2026-09-08 07:43 | 6570949 | 064 | Jugraj | $457.60 | $3.00 | $460.60 | Lumper |
+| 2026-09-08 10:12 | 6571780 | 073 | *(blank)* | $200.00 | $3.00 | $203.00 | lumper |
+| 2026-09-08 18:48 | 6574941 | 1017 | rajinder | $62.18 | $3.00 | $65.18 | repair |
