@@ -249,7 +249,7 @@ Additive to v1 §12. Same rules: `uuid` for URL-exposed rows, composite natural 
 |---|---|
 | `drivers` | `uuid`, `display_name`, `status`. |
 | `driver_aliases` | `(alias_normalized)` unique, → `driver_id`, `source`, `confirmed_at`. Invoice names are free text; this is the join. |
-| `trucks` | `unit_number` (text, zero-padded per D6), → optional `truck_profile_id` from v1 §16. **Reconciles v1's `truck_profiles.truck_number` placeholder with the real roster** (031…1023). |
+| `trucks` | `unit_number` **text** — see D18, which supersedes D6. → optional `truck_profile_id` from v1 §16. **Reconciles v1's `truck_profiles.truck_number` placeholder with the real roster** (031…1023). |
 | `fuel_cards` | `card_number` unique, `supplier`, `status`. 27 active. |
 | `card_assignments` | `(card_id, truck_id, driver_id, effective_from, effective_to)`. **Effective-dated** — a reassignment must not retroactively change how past transactions resolve. |
 
@@ -351,6 +351,7 @@ Exclusions are named, not hidden: split fills with no single planned stop to mat
 | **D15** | **Sidebar IA replaces the tab bar.** | Eleven destinations across three groups; tabs stopped scaling at four. Supersedes parts of T-04/T-21/T-23. |
 | **D16** | **Anomaly thresholds are data, not constants.** | Every threshold in A10 is a guess until real history is loaded. |
 | **D17** | **The Receipt Queue is built as an exceptions queue from day one.** | A18 Q3 may automate the check; the layout must not assume every item needs a decision. |
+| **D18** | **`unit_number` is `text`, stored exactly as the fleet writes it. Supersedes D6.** | D6 chose `integer` with a three-digit display pad on the evidence of `022`-style numbers. The real roster (A19) runs `031`…`073` **and** `101`, `1012`…`1023`. A three-digit pad cannot render a four-digit unit, and `integer` loses the leading zero that distinguishes `031` from `31` on the invoice. `formatUnitNumber()` survives as a validator and normaliser, not a padder. |
 
 ---
 
@@ -360,6 +361,7 @@ These are edits to already-specified v1 tickets, not new tickets. Apply them whe
 
 - **T-02 (done)** — schema additions in A11 land as new migrations (`0003_actuals.sql` …), **not** by editing `0001_init.sql`, which has applied. The descriptor and drift test extend to every new table.
 - **T-03 (done)** — `truck_profiles.truck_number` placeholders (022/056/091) are superseded by the real roster in `trucks` (A11). Keep the profiles; stop treating their unit numbers as the roster.
+- **T-01 (done) — `formatUnitNumber()` changes contract under D18.** It was a three-digit zero-pad over an `integer`; it becomes a normaliser over `text` that preserves the stored string and rejects anything that is not 3–4 digits. Every call site is display-only, so this is a function body plus a test table, not a migration. **Do this inside T-25**, before any truck row exists — the 27-unit seed in step 25.4 is the first thing that would enshrine the wrong format.
 - **T-18** — `GET /health` gains latest-invoice-period alongside latest-sheet-date.
 - **T-21 / T-23** — build the **sidebar shell** (D15), not the tab bar. The `CH Fuel App.dc.html` design file is the reference; its Plan and Plans screens are the ported v1 Plan and Recent tabs and carry the v1 UI contract forward unchanged.
 - **T-19** — unchanged in code, but now load-bearing: it is the input to A14.

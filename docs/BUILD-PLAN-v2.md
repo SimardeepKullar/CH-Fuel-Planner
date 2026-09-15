@@ -27,13 +27,14 @@ Same contract as v1. Every ticket is decomposed into steps that can be implement
 
 **Files.** New: `migrations/0003_actuals.sql`. **Left alone:** `0001_init.sql` and `0002_seed.sql` — both have applied; A16 forbids editing them.
 
-**Logic.** A11's reference block. `trucks.unit_number` is **text**, never integer — `072` and `1012` coexist and the leading zero is meaningful (D6). `card_assignments` carries `effective_from`/`effective_to` with `effective_to` nullable for "current", and an exclusion constraint so one card cannot have two overlapping assignments.
+**Logic.** A11's reference block. `trucks.unit_number` is **text**, never integer — `072` and `1012` coexist and the leading zero is meaningful (**D18, which supersedes D6**; retire T-01's three-digit pad in this step, per A16). `card_assignments` carries `effective_from`/`effective_to` with `effective_to` nullable for "current", and an exclusion constraint so one card cannot have two overlapping assignments.
 
 The temptation to fold `trucks` into v1's `truck_profiles` must be resisted: a profile is a *model spec* (capacity, mpg, dimensions) shared by several trucks; a truck is a *fleet number* with a card history. Conflating them is why v1's placeholder `truck_number` column exists, and A16 retires it.
 
 **Tests.**
 - `db:migrate` applies; second run is a no-op.
-- `unit_number = '072'` round-trips with its leading zero.
+- `unit_number = '072'` round-trips with its leading zero, and `'1012'` round-trips at four digits.
+- `formatUnitNumber('1012')` returns `1012`, not a truncation or a three-digit pad; `formatUnitNumber('31')` is rejected rather than silently padded to `031`.
 - Two overlapping assignments for one card → rejected by constraint, not by application code.
 - `effective_to = NULL` is accepted and means current.
 - An alias unique on `alias_normalized` rejects a duplicate spelling of one name.
@@ -126,7 +127,7 @@ The temptation to fold `trucks` into v1's `truck_profiles` must be resisted: a p
 - A stop one second before a boundary resolves to the old truck; one second after, the new one.
 - An open-ended assignment (`effective_to` null) resolves for any later instant.
 - A gap with no assignment returns null — not the nearest assignment.
-- `formatUnitNumber` output is used for display and `1012` is not truncated.
+- `formatUnitNumber` output is used for display and `1012` is not truncated (D18).
 - A truck with no `truck_profile_id` still resolves.
 - **Pass:** all five.
 

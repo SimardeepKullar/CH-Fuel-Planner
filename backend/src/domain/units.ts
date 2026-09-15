@@ -17,6 +17,19 @@ export function gallonsToLiters(gallons: number): number {
   return gallons * LITERS_PER_GALLON;
 }
 
-export function formatUnitNumber(unitNumber: number): string {
-  return String(unitNumber).padStart(3, "0");
+const UNIT_NUMBER_PATTERN = /^\d{3,4}$/;
+
+/**
+ * D18 (supersedes D6): unit_number is text, stored exactly as the fleet
+ * writes it — never computed or padded. The real roster runs 031...073 and
+ * 101, 1012...1023, so a fixed-width pad would either truncate a 4-digit
+ * unit or fail to distinguish '031' from a raw '31'. This validates and
+ * normalises (trims whitespace) for display; it does not reformat.
+ */
+export function formatUnitNumber(unitNumber: string): string {
+  const trimmed = unitNumber.trim();
+  if (!UNIT_NUMBER_PATTERN.test(trimmed)) {
+    throw new Error(`invalid unit number: ${JSON.stringify(unitNumber)}`);
+  }
+  return trimmed;
 }

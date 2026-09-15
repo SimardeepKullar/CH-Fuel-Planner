@@ -13,12 +13,20 @@ describe("units", () => {
     expect(Math.abs(roundTripped - meters)).toBeLessThan(1e-9);
   });
 
-  it("formats unit numbers with a three-digit zero-pad", () => {
-    expect(formatUnitNumber(22)).toBe("022");
-    expect(formatUnitNumber(7)).toBe("007");
+  it("returns a 3-digit unit number unchanged, preserving its leading zero", () => {
+    expect(formatUnitNumber("072")).toBe("072");
+    expect(formatUnitNumber("031")).toBe("031");
   });
 
-  it("does not truncate unit numbers wider than three digits", () => {
-    expect(formatUnitNumber(1234)).toBe("1234");
+  it("returns a 4-digit unit number unchanged, not truncated", () => {
+    expect(formatUnitNumber("1012")).toBe("1012");
+  });
+
+  it("rejects a unit number shorter than 3 digits rather than silently padding it", () => {
+    expect(() => formatUnitNumber("31")).toThrow();
+  });
+
+  it("rejects non-digit input", () => {
+    expect(() => formatUnitNumber("07a")).toThrow();
   });
 });
