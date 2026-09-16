@@ -61,7 +61,7 @@ If the spec and the repository disagree, say so and propose the edit.
 | T-24 | Deployment — Vercel + Neon | T-21 | 6 | specified · amend per A16 |
 | **T-25** | **Actuals schema migration** | T-02 | **7** | **done — merged (`324e939`, PR #12)** |
 | **T-26** | **Shared reference layer and effective-dated assignments** | T-25 | **7** | **new** |
-| **T-27** | **BVD invoice parser — Excel, with PDF fallback** | T-25 | **7** | **new** |
+| **T-27** | **BVD invoice parser — CSV, with PDF fallback** | T-25 | **7** | **new** |
 | **T-28** | **Reconciliation and quarantine** | T-27 | **7** | **new** |
 | **T-29** | **Raw→resolved resolution at import** | T-26, T-28 | **7** | **new** |
 | **T-30** | **Anomaly engine** | T-29 | **7** | **new** |
@@ -140,15 +140,17 @@ Each ticket states a **goal**, the **files** it touches (new vs existing, and fo
 
 ---
 
-## T-27 · BVD invoice parser — Excel, with PDF fallback
+## T-27 · BVD invoice parser — CSV, with PDF fallback
 
 **Priority 27.**
 
 **Goal.** Bytes → header metadata + product lines + express rows, grouped into stops by base auth code. Pure, no I/O.
 
-**Files.** New: `backend/src/invoice/parseInvoiceXlsx.ts`, `parseInvoicePdf.ts`, `groupByAuthCode.ts` + tests, `backend/test/fixtures/invoices/999210.xlsx`.
+**Files.** New: `backend/src/invoice/parseInvoiceCsv.ts`, `parseInvoicePdf.ts`, `groupByAuthCode.ts` + tests, `backend/test/fixtures/invoices/999210.csv`.
 
 **Dependencies.** T-25.
+
+**Note (supersedes an earlier "Excel" framing, D13).** The BVD portal's actual invoice download, verified against a real download of invoice 999210, is a CSV transaction export — column headers, no letterhead — not an `.xlsx` workbook. `parseInvoiceCsv.ts` reuses `csv-parse` (already a dependency, same as v1's `parseBvdCsv.ts`); no new binary-format library is needed. The fixture's transaction/express/grand-totals rows are the real portal export verbatim; its header metadata block (invoice number, period, dates, both addresses) is prepended from this document's already-verified §A5 figures, in the same labelled-row style `parseBvdCsv.ts` uses for `Company Id`/`Effective Date`, since the raw export carries no such block itself.
 
 **Definition of done.**
 - [ ] Invoice 999210 parses to its header (number, period 2026-09-03→09, invoice date 09-10, due 09-11) and its printed per-code totals.
@@ -156,7 +158,7 @@ Each ticket states a **goal**, the **files** it touches (new vs existing, and fo
 - [ ] Per-gallon prices parse at **4dp** with no rounding (`5.2395`, `5.9890`, `4.8890`).
 - [ ] An unmapped product code **fails its row** with a reason code; it is never default-mapped to diesel (v1 §11.1's tripwire, reused).
 - [ ] Express rows parse separately, including the row with **no driver name** and the flat `$3.00` fee on every one.
-- [ ] `parseInvoicePdf` produces the same shape for the same invoice, and is only reached when the Excel path is absent (D13).
+- [ ] `parseInvoicePdf` produces the same shape for the same invoice, and is only reached when the CSV path is absent (D13).
 - [ ] The parser prints nothing and performs no I/O — asserted by a console spy.
 
 ---
@@ -234,7 +236,7 @@ Each ticket states a **goal**, the **files** it touches (new vs existing, and fo
 **Dependencies.** T-28, T-29, T-30.
 
 **Definition of done.**
-- [ ] `npm run import-invoice -- ./data/bvd-invoices/999210.xlsx` prints the report and exits 0.
+- [ ] `npm run import-invoice -- ./data/bvd-invoices/999210.csv` prints the report and exits 0.
 - [ ] Database holds: 1 invoice, ~60 `fuel_stops`, every product line, the express rows, resolved trucks/drivers, and the anomaly rows from T-30.
 - [ ] `Σ fuel_stop_lines.amount_usd + Σ express_charges.total_usd = 50929.71` — asserted in SQL, not in application code.
 - [ ] A quarantined file exits **non-zero** with the imbalance on stderr and writes no child rows.

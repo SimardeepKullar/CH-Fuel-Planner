@@ -58,7 +58,7 @@ export interface ParsedBvdFile {
   rows: RawBvdRow[];
 }
 
-function normaliseHeaderCell(cell: string): string {
+export function normaliseHeaderCell(cell: string): string {
   return cell.trim().toUpperCase().replace(/\s+/g, " ");
 }
 

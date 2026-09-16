@@ -13,3 +13,20 @@ graphify-out/
 
 # Claude Code: live session lock, not project config
 .claude/scheduled_tasks.lock
+
+# ─── Real BVD invoice data ────────────────────────────────────────────────
+# Real per-driver, per-transaction financial data (who bought how much
+# fuel, where, when, for how much). Git history is permanent and repo
+# visibility is one misclick — this never gets committed, private repo or
+# not. Place real invoices in backend/test/fixtures/invoices/ locally —
+# the real-invoice describe blocks pick them up from there and skip
+# automatically when the file is absent (see e.g. parseInvoiceCsv.test.ts).
+backend/test/fixtures/invoices/*.csv
+backend/test/fixtures/invoices/*.pdf
+backend/test/fixtures/invoices/*.PROVENANCE.md
+
+# Exception: a synthetic, redacted fixture may be committed so the
+# structural assertions can run on a fresh clone or in CI.
+!backend/test/fixtures/invoices/sample-redacted.csv
+!backend/test/fixtures/invoices/sample-redacted.pdf
+!backend/test/fixtures/invoices/README.md

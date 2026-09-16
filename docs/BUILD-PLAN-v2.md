@@ -137,15 +137,17 @@ The temptation to fold `trucks` into v1's `truck_profiles` must be resisted: a p
 
 ---
 
-## T-27 · BVD invoice parser — Excel, with PDF fallback
+## T-27 · BVD invoice parser — CSV, with PDF fallback
+
+**Note (supersedes an earlier "Excel" framing, D13).** A real portal download of invoice 999210 confirmed the BVD export is a CSV transaction report, not an `.xlsx` workbook — no new binary-format dependency is needed, and `parseInvoiceCsv.ts` reuses `csv-parse` exactly as v1's `parseBvdCsv.ts` does.
 
 ### Step 27.1 — Header and sheet shape
 
 **Goal.** Invoice metadata and printed totals, separated from the data rows.
 
-**Files.** New: `backend/src/invoice/parseInvoiceXlsx.ts` + test, `backend/test/fixtures/invoices/999210.xlsx`.
+**Files.** New: `backend/src/invoice/parseInvoiceCsv.ts` + test, `backend/test/fixtures/invoices/999210.csv`.
 
-**Logic.** Read the header block (invoice number, period start/end, invoice date, due date, both party addresses) and the printed per-code totals block. Normalise column headers by trimming, uppercasing and collapsing whitespace — the same discipline as v1's `parseBvdCsv` (T-06 step 6.1).
+**Logic.** Read the header block (invoice number, period start/end, invoice date, due date, both party addresses) and the printed per-code totals block. The real CSV export carries no such header block itself (it opens straight into `Fuel Card Transactions`), so the fixture prepends one, labelled-row style, from this document's already-verified §A5 figures — the same technique as v1's `parseBvdCsv` metadata row (`Company Id`/`Effective Date`, T-06 step 6.1). Normalise column headers by trimming, uppercasing and collapsing whitespace — same discipline as `parseBvdCsv`.
 
 **Trust the printed figures as given.** They are the reconciliation target; the parser records them, it never recomputes them. Same rule as v1's `YOUR PRICE`: a supplier's number is theirs.
 
@@ -160,7 +162,7 @@ The temptation to fold `trucks` into v1's `truck_profiles` must be resisted: a p
 
 **Goal.** Every fuel line, at full precision.
 
-**Files.** Modified: `parseInvoiceXlsx.ts`. New: `backend/src/invoice/productCode.ts`.
+**Files.** Modified: `parseInvoiceCsv.ts`. New: `backend/src/invoice/productCode.ts`.
 
 **Logic.** One row per product line with product code, gallons, retail, billed, amount, card, unit text, driver text, station text, timestamp, auth code. Prices parse as **strings into `numeric(9,4)`-safe decimals**, never through `parseFloat` and back — `5.2395` must not become `5.239499999`.
 
@@ -193,13 +195,13 @@ This is the ticket's whole reason for existing. The legacy sheet recorded `A2520
 
 ### Step 27.4 — Express rows and the PDF fallback
 
-**Goal.** The second section, and the path for when Excel is not available.
+**Goal.** The second section, and the path for when CSV is not available.
 
 **Files.** New: `backend/src/invoice/parseExpressRows.ts`, `backend/src/invoice/parseInvoicePdf.ts` + tests.
 
 **Logic.** Express rows have their own shape: date, express code, tractor text, optional driver text, amount, fee, total, payee, note, category. **Every row carries a flat $3.00 fee** — assert it rather than assuming it, because it is the kind of constant that changes without notice.
 
-The PDF path produces the **same output type** as the Excel path, so everything downstream is oblivious. It is a fallback (D13) and is expected to be the source of balance failures, which is precisely why T-28 exists before anything is written.
+The PDF path produces the **same output type** as the CSV path, so everything downstream is oblivious. It is a fallback (D13) and is expected to be the source of balance failures, which is precisely why T-28 exists before anything is written.
 
 **Tests.**
 - The four A19 express rows parse, including the blank-driver row at $200.00 + $3.00 = $203.00.
@@ -477,7 +479,7 @@ Common steps, applied per ticket rather than repeated below: a pure query-builde
 - Balanced → 200 with a per-code write preview; confirm writes.
 - Imbalanced → **200 with `status:"quarantined"`** and the full report; database has no child rows.
 - Duplicate → **409** problem+json, distinguishable from quarantine by the caller.
-- Non-Excel, non-PDF upload → 415 problem+json.
+- Non-CSV, non-PDF upload → 415 problem+json.
 - Route module imports no parser internals — asserted by module graph.
 - **Pass:** all five.
 
@@ -683,7 +685,7 @@ Common steps, applied per ticket rather than repeated below: a pure query-builde
 **Tests.**
 - Parsing shows file name, progress, row count.
 - The preview shows the per-code balance check summing to $50,929.71 and a confirm that writes.
-- A non-Excel/PDF drop is refused before upload.
+- A non-CSV/PDF drop is refused before upload.
 - **Pass:** all three.
 
 ### Step 42.2 — Quarantine as a screen

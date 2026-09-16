@@ -76,7 +76,7 @@ The frontend today is the v1 three-tab shell (Plan / Recent / Dev Tools) plus a 
 
 **In scope**
 
-- Weekly BVD invoice import (Excel primary, PDF fallback), with reconciliation and a quarantine state.
+- Weekly BVD invoice import (CSV primary, PDF fallback), with reconciliation and a quarantine state.
 - Transactions, transaction detail, receipt queue, other charges.
 - Drivers, trucks, stations analysis keyed on the shared reference layer.
 - Plan vs Actual — live (current invoice) and historical backtest.
@@ -165,7 +165,7 @@ Numbered to match the design brief. The design file `CH Fuel App.dc.html` alread
 Landing screen. Answers "how did last week go" in five seconds. KPI cards for the selected period using the A5 figures: total spend, diesel gal/$, **average billed price (headline)**, discount captured (subordinate), DEF, other charges, receipt compliance, anomalies flagged. Below: billed-price-per-gallon trend across recent periods, top-spend-by-driver bars, and a compact anomalies list linking into Transactions.
 
 ### A8.2 Import
-Drag-and-drop for the BVD Excel export; PDF is a fallback path. Three states designed carefully:
+Drag-and-drop for the BVD CSV export; PDF is a fallback path. Three states designed carefully:
 1. **Parsing** — progress, file name, row/page count.
 2. **Reconciliation passed** — preview of what will be written, with the balance check shown explicitly: parsed rows sum to the printed grand total per product code (TA + DF + S + Express = $50,929.71). Confirm writes.
 3. **Reconciliation failed → quarantined** — a **full screen**, not a toast. Which product code failed, expected vs parsed, the offending rows. **Nothing is written.** The user must be able to decide whether to fix the file or report a BVD issue.
@@ -347,7 +347,7 @@ Exclusions are named, not hidden: split fills with no single planned stop to mat
 |---|---|---|
 | **D11** | **One repository, one deployment.** The merged app ships from `CH-Fuel-Planner`; no second service. | The shared reference layer is a join, not an integration. Two services would need it in both. |
 | **D12** | **Quarantine is a persisted invoice row with `status='quarantined'` and zero child rows.** | The user must be able to come back to it. A toast loses the imbalance report. |
-| **D13** | **Excel is the primary import path; PDF is a fallback.** | The BVD export is the authoritative shape; PDF parsing is where balance failures come from. |
+| **D13** | **CSV is the primary import path; PDF is a fallback. Supersedes an earlier "Excel" framing** — the BVD portal's invoice download is a CSV transaction export, verified against a real download (invoice 999210), not an .xlsx workbook. | The BVD export is the authoritative shape; PDF parsing is where balance failures come from. |
 | **D14** | **Resolution happens at import, stored, not computed per query.** Raw text is kept forever. | An assignment edit must re-resolve deliberately (a job), not silently change history on next read. |
 | **D15** | **Sidebar IA replaces the tab bar.** | Eleven destinations across three groups; tabs stopped scaling at four. Supersedes parts of T-04/T-21/T-23. |
 | **D16** | **Anomaly thresholds are data, not constants.** | Every threshold in A10 is a guess until real history is loaded. |
@@ -393,7 +393,7 @@ Flagged, not solved. Each names what it blocks.
 | **Q3** | Does Samsara's API expose driver receipt uploads? If yes the Receipt Queue becomes an exceptions queue. | A8.5 scope (D17 hedges it) |
 | **Q4** | Does a future unified operations dashboard (TransPlus, Samsara, BorderConnect, Motive) absorb this app as a section? | Shell's tolerance for a larger nav (A7) |
 | **Q5** | Is BVD's published price file obtainable as a file, or only as the invoice? Decides whether the A6.5 price audit is real or aspirational. | A10's "billed above published" rule |
-| **Q6** | Ten years of Gmail invoices — are they all the same Excel shape, or do older years differ? | T-47 sizing |
+| **Q6** | Ten years of Gmail invoices — are they all the same CSV shape, or do older years differ? | T-47 sizing |
 
 ---
 
