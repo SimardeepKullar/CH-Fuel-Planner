@@ -11,9 +11,10 @@ export class InvoiceFormatError extends Error {
   }
 }
 
-/** Invoice-level metadata. The real BVD export carries none of this — see
- * `999210.PROVENANCE.md` — so every field here comes from a labelled row,
- * the same technique v1's `parseBvdCsv` uses for `Company Id`/`Effective Date`. */
+/** Invoice-level metadata. The real BVD export carries none of this — it
+ * opens straight into `Fuel Card Transactions` — so every field here comes
+ * from a labelled row prepended ahead of it, the same technique v1's
+ * `parseBvdCsv` uses for `Company Id`/`Effective Date`. */
 export interface InvoiceHeader {
   invoiceNumber: string;
   /** ISO date, "2026-09-03". */
@@ -451,8 +452,11 @@ export function parseInvoiceRecords(
 
 /**
  * Parses a BVD invoice CSV export (D13: the primary path; see
- * `parseInvoicePdf` for the fallback). See `999210.PROVENANCE.md` for what
- * in the fixture is a real portal export versus a reconstructed header.
+ * `parseInvoicePdf` for the fallback). Tests run against a committed
+ * synthetic fixture plus a real invoice, if one is present locally at
+ * `data/bvd-invoices/` (gitignored — see that directory's own notes on a
+ * real fixture, and `backend/test/fixtures/invoices/README.md` for why real
+ * invoice data never lives in this repo).
  */
 export function parseInvoiceCsv(
   input: Buffer | string,
