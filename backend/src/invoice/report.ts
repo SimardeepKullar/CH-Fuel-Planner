@@ -1,0 +1,119 @@
+import type { InvoiceLineRejectionCode } from "./parseInvoiceCsv.js";
+import type { CentsDelta, ReconcileResult } from "./reconcile.js";
+import type { FuelStopGroup } from "./groupByAuthCode.js";
+import type { ExpressRow } from "./parseExpressRows.js";
+
+export type ImportRejectionCode =
+  | InvoiceLineRejectionCode
+  | "AMOUNT_IMBALANCE"
+  | "GALLONS_IMBALANCE"
+  | "GRAND_TOTAL_IMBALANCE"
+  | "UNKNOWN_CARD"
+  | "UNKNOWN_TRUCK_UNIT"
+  | "MISSING_UNIT";
+
+export interface NormalizedRejection {
+  lineNumber: number;
+  authCode: string | null;
+  code: ImportRejectionCode;
+  message: string;
+}
+
+export interface ImportReport {
+  invoiceNumber: string;
+  fileSha256: string;
+  grandTotalUsd: string;
+  reconcile: ReconcileResult;
+  parserRejectionCount: number;
+  unknownCardNumbers: string[];
+  unknownTruckUnits: (string | null)[];
+  /** Every reason this invoice would quarantine, ready to insert into
+   * `invoice_rejections` — parser rejections, reconcile imbalances, and
+   * card/truck lookup misses, all in one shape. Empty iff the invoice
+   * balances and every lookup resolved. */
+  rejections: NormalizedRejection[];
+}
+
+export interface BuildImportReportInput {
+  invoiceNumber: string;
+  fileSha256: string;
+  grandTotalUsd: string;
+  parserRejections: ReadonlyArray<{
+    lineNumber: number;
+    authCode: string | null;
+    code: InvoiceLineRejectionCode;
+    message: string;
+  }>;
+  reconcileResult: ReconcileResult;
+  cardMisses: readonly FuelStopGroup[];
+  truckUnitMisses: readonly ExpressRow[];
+}
+
+function imbalanceRejections(
+  imbalances: readonly CentsDelta[],
+  code: "AMOUNT_IMBALANCE" | "GALLONS_IMBALANCE",
+): NormalizedRejection[] {
+  return imbalances.map((i) => ({
+    lineNumber: i.contributingLineNumbers[0] ?? 0,
+    authCode: null,
+    code,
+    message:
+      `${i.productCode}: expected ${i.expectedCents} cents, parsed ${i.parsedCents} cents ` +
+      `(delta ${i.deltaCents})`,
+  }));
+}
+
+/**
+ * Shapes everything `importInvoice` gathered into one report: the parser's
+ * own rejections, this ticket's reconcile imbalances, and its card/truck
+ * lookup misses — one list, ready to insert into `invoice_rejections`
+ * verbatim on quarantine. Empty `rejections` is the promote signal.
+ *
+ * Pure — no database, no HTTP, no clock.
+ */
+export function buildImportReport(input: BuildImportReportInput): ImportReport {
+  const { reconcileResult, cardMisses, truckUnitMisses } = input;
+
+  const rejections: NormalizedRejection[] = [
+    ...input.parserRejections,
+    ...imbalanceRejections(reconcileResult.amountImbalances, "AMOUNT_IMBALANCE"),
+    ...imbalanceRejections(reconcileResult.gallonImbalances, "GALLONS_IMBALANCE"),
+    ...cardMisses.map((g) => ({
+      lineNumber: g.lines[0]?.lineNumber ?? 0,
+      authCode: g.baseAuthCode,
+      code: "UNKNOWN_CARD" as const,
+      message: `unknown card number: "${g.cardNumber}"`,
+    })),
+    ...truckUnitMisses.map((r): NormalizedRejection => {
+      const code: "MISSING_UNIT" | "UNKNOWN_TRUCK_UNIT" =
+        r.unitRaw === null ? "MISSING_UNIT" : "UNKNOWN_TRUCK_UNIT";
+      const message =
+        r.unitRaw === null
+          ? "express row has no tractor/unit text"
+          : `unknown truck unit number: "${r.unitRaw}"`;
+      return { lineNumber: r.lineNumber, authCode: r.expressCode, code, message };
+    }),
+  ];
+
+  if (reconcileResult.grandTotal.deltaCents !== 0) {
+    rejections.push({
+      lineNumber: 0,
+      authCode: null,
+      code: "GRAND_TOTAL_IMBALANCE",
+      message:
+        `grand total: expected ${reconcileResult.grandTotal.expectedCents} cents, parsed ` +
+        `${reconcileResult.grandTotal.parsedCents} cents (delta ${reconcileResult.grandTotal.deltaCents})`,
+    });
+  }
+
+  return {
+    invoiceNumber: input.invoiceNumber,
+    fileSha256: input.fileSha256,
+    grandTotalUsd: input.grandTotalUsd,
+    reconcile: reconcileResult,
+    parserRejectionCount: input.parserRejections.length,
+    unknownCardNumbers: cardMisses.map((g) => g.cardNumber),
+    unknownTruckUnits: truckUnitMisses.map((r) => r.unitRaw),
+    rejections,
+  };
+}
