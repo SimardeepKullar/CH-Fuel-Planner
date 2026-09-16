@@ -6,3 +6,10 @@ dist/
 .DS_Store
 scripts/.cache/
 __pycache__/
+
+# graphify: regenerable output (run `graphify update .` to rebuild), also
+# embeds converted operator-export data that shouldn't be checked in
+graphify-out/
+
+# Claude Code: live session lock, not project config
+.claude/scheduled_tasks.lock
