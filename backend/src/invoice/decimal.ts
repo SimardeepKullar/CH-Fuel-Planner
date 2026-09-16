@@ -37,3 +37,25 @@ export function toDecimalString(raw: string, decimals: number): string {
   const isZero = /^0+$/.test(whole) && /^0*$/.test(frac);
   return negative && !isZero ? `-${magnitude}` : magnitude;
 }
+
+/**
+ * Converts a decimal-safe dollar string (any precision) to integer cents —
+ * the only safe representation for summing or comparing currency, since
+ * binary floating point cannot represent most cent amounts exactly.
+ */
+export function toCents(usd: string): number {
+  const negative = usd.startsWith("-");
+  const unsigned = negative ? usd.slice(1) : usd;
+  const [whole = "0", frac = "0"] = unsigned.split(".");
+  const cents = Number(whole) * 100 + Number(frac.padEnd(2, "0").slice(0, 2));
+  return negative ? -cents : cents;
+}
+
+/** The inverse of `toCents` — integer cents back to a 2dp dollar string. */
+export function fromCents(cents: number): string {
+  const negative = cents < 0;
+  const abs = Math.abs(cents);
+  const whole = Math.floor(abs / 100);
+  const frac = String(abs % 100).padStart(2, "0");
+  return `${negative ? "-" : ""}${whole}.${frac}`;
+}
