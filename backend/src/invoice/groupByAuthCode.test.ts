@@ -14,9 +14,10 @@ function redactedLines(): ValidatedInvoiceLine[] {
   return parseInvoiceCsv(readFileSync(REDACTED_PATH), DEFAULT_INVOICE_PRODUCT_CODES).lines;
 }
 
-// A real invoice, if the operator has dropped one in locally (gitignored).
+// A real invoice, if the operator has dropped one in locally
+// (data/bvd-invoices/, gitignored).
 const REAL_PATH = fileURLToPath(
-  new URL("../../test/fixtures/invoices/999210.csv", import.meta.url),
+  new URL("../../../data/bvd-invoices/999210.csv", import.meta.url),
 );
 const hasRealFixture = existsSync(REAL_PATH);
 function realLines(): ValidatedInvoiceLine[] {

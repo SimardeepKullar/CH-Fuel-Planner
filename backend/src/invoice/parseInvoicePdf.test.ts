@@ -11,9 +11,10 @@ const REDACTED_PATH = fileURLToPath(
 );
 const redacted = () => readFileSync(REDACTED_PATH);
 
-// A real invoice, if the operator has dropped one in locally (gitignored).
+// A real invoice, if the operator has dropped one in locally
+// (data/bvd-invoices/, gitignored).
 const REAL_PATH = fileURLToPath(
-  new URL("../../test/fixtures/invoices/999210.pdf", import.meta.url),
+  new URL("../../../data/bvd-invoices/999210.pdf", import.meta.url),
 );
 const hasRealFixture = existsSync(REAL_PATH);
 
