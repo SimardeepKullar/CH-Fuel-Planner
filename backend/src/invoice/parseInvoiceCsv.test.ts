@@ -157,7 +157,7 @@ describe("validateProductLine", () => {
     const row = [...baseRow];
     row[0] = "A999999999-ZZ";
     row[8] = "ZZ";
-    const result = validateProductLine(row, 42, "2955805", DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = validateProductLine(row, 42, "1000001", DEFAULT_INVOICE_PRODUCT_CODES);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.rejection.code).toBe("UNMAPPED_PRODUCT");
@@ -172,7 +172,7 @@ describe("validateProductLine", () => {
       const row = [...baseRow];
       row[0] = `A999999999-${code}`;
       row[8] = code;
-      const result = validateProductLine(row, 1, "2955805", DEFAULT_INVOICE_PRODUCT_CODES);
+      const result = validateProductLine(row, 1, "1000001", DEFAULT_INVOICE_PRODUCT_CODES);
       expect(result.ok).toBe(true);
     }
   });
@@ -180,7 +180,7 @@ describe("validateProductLine", () => {
   it("rejects a malformed auth code with SCHEMA_ERROR", () => {
     const row = [...baseRow];
     row[0] = "NOAUTHCODE";
-    const result = validateProductLine(row, 7, "2955805", DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = validateProductLine(row, 7, "1000001", DEFAULT_INVOICE_PRODUCT_CODES);
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.rejection.code).toBe("SCHEMA_ERROR");
