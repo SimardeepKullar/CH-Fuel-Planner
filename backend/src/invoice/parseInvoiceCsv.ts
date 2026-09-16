@@ -454,9 +454,9 @@ export function parseInvoiceRecords(
  * Parses a BVD invoice CSV export (D13: the primary path; see
  * `parseInvoicePdf` for the fallback). Tests run against a committed
  * synthetic fixture plus a real invoice, if one is present locally at
- * `data/bvd-invoices/` (gitignored — see that directory's own notes on a
- * real fixture, and `backend/test/fixtures/invoices/README.md` for why real
- * invoice data never lives in this repo).
+ * `data/bvd-invoices/` (gitignored — never committed; see
+ * `backend/test/fixtures/invoices/README.md` for why, and for how to build
+ * a real fixture from a portal download).
  */
 export function parseInvoiceCsv(
   input: Buffer | string,
