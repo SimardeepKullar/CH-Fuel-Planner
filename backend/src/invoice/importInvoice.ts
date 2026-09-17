@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
+import { runAnomalies } from "../anomaly/runAnomalies.js";
 import { getCardByNumber } from "../catalog/cards.js";
 import { getTruckByUnitNumber } from "../catalog/trucks.js";
 import { resolveExpressDriver, type ExpressDriverResolution } from "../resolve/resolveDriver.js";
@@ -320,8 +321,10 @@ async function insertInvoiceRejections(
 
 /**
  * Hash → dedupe on `file_sha256` → check `invoice_number` → parse → group →
- * reconcile → promote in one transaction, or write the invoice row with
- * `status='quarantined'` plus `invoice_rejections` and stop (T-28).
+ * reconcile → promote → run the anomaly engine, in one transaction, or write
+ * the invoice row with `status='quarantined'` plus `invoice_rejections` and
+ * stop (T-28). `runAnomalies` (T-30) only ever runs on a promoted invoice —
+ * a quarantined one has zero `fuel_stops` for it to run rules over.
  *
  * Any rejection at all — a parser rejection, a reconcile imbalance, or an
  * unknown card/truck — forces quarantine: an invoice row with rejections
@@ -426,6 +429,7 @@ export async function importInvoice(
         const driverResolution = expressDriverResolutions[i]!;
         await insertExpressCharge(client, invoiceId, row, truckId, driverResolution);
       }
+      await runAnomalies(client, invoiceId);
     } else {
       await insertInvoiceRejections(client, invoiceId, report);
     }
