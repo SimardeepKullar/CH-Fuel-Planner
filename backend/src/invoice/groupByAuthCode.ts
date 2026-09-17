@@ -1,3 +1,4 @@
+import { fromCents, toCents } from "./decimal.js";
 import type { ValidatedInvoiceLine } from "./parseInvoiceCsv.js";
 
 export class FuelStopGroupingError extends Error {
@@ -29,24 +30,8 @@ export interface FuelStopGroup {
 }
 
 function sumDecimal2dp(values: readonly string[]): string {
-  const totalCents = values.reduce((sum, value) => sum + dollarsToCents(value), 0);
-  return centsToDollars(totalCents);
-}
-
-function dollarsToCents(value: string): number {
-  const negative = value.startsWith("-");
-  const unsigned = negative ? value.slice(1) : value;
-  const [whole = "0", frac = "0"] = unsigned.split(".");
-  const cents = Number(whole) * 100 + Number(frac.padEnd(2, "0").slice(0, 2));
-  return negative ? -cents : cents;
-}
-
-function centsToDollars(cents: number): string {
-  const negative = cents < 0;
-  const abs = Math.abs(cents);
-  const whole = Math.floor(abs / 100);
-  const frac = String(abs % 100).padStart(2, "0");
-  return `${negative ? "-" : ""}${whole}.${frac}`;
+  const totalCents = values.reduce((sum, value) => sum + toCents(value), 0);
+  return fromCents(totalCents);
 }
 
 /**

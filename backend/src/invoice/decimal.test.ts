@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DecimalFormatError, toDecimalString } from "./decimal.js";
+import { DecimalFormatError, fromCents, toCents, toDecimalString } from "./decimal.js";
 
 describe("toDecimalString", () => {
   it("pads a shorter decimal out to the requested precision", () => {
@@ -37,5 +37,32 @@ describe("toDecimalString", () => {
     // A pure string-based implementation never has this failure mode.
     expect(toDecimalString("5.2395", 4)).not.toContain("9999");
     expect(toDecimalString("5.2395", 4)).not.toContain("0001");
+  });
+});
+
+describe("toCents / fromCents", () => {
+  it("converts a 2dp dollar string to integer cents and back", () => {
+    expect(toCents("218.35")).toBe(21835);
+    expect(fromCents(21835)).toBe("218.35");
+  });
+
+  it("handles negative amounts", () => {
+    expect(toCents("-36.78")).toBe(-3678);
+    expect(fromCents(-3678)).toBe("-36.78");
+  });
+
+  it("handles zero and whole dollars", () => {
+    expect(toCents("0.00")).toBe(0);
+    expect(fromCents(0)).toBe("0.00");
+    expect(toCents("100.00")).toBe(10000);
+    expect(fromCents(10000)).toBe("100.00");
+  });
+
+  it("sums a compensating pair to exactly zero in integer cents, never a float artifact", () => {
+    // The exact failure mode reconcile.ts guards against: two errors of
+    // equal and opposite magnitude must not silently cancel when summed
+    // per product code rather than as one grand total.
+    const sum = toCents("218.35") + toCents("36.78") - toCents("255.13");
+    expect(sum).toBe(0);
   });
 });

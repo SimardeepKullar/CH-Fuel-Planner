@@ -62,7 +62,7 @@ If the spec and the repository disagree, say so and propose the edit.
 | **T-25** | **Actuals schema migration** | T-02 | **7** | **done — merged (`324e939`, PR #12)** |
 | **T-26** | **Shared reference layer and effective-dated assignments** | T-25 | **7** | **new** |
 | **T-27** | **BVD invoice parser — CSV, with PDF fallback** | T-25 | **7** | **new** |
-| **T-28** | **Reconciliation and quarantine** | T-27 | **7** | **new** |
+| **T-28** | **Reconciliation and quarantine** | T-26, T-27 | **7** | **new** |
 | **T-29** | **Raw→resolved resolution at import** | T-26, T-28 | **7** | **new** |
 | **T-30** | **Anomaly engine** | T-29 | **7** | **new** |
 | **T-31** | **`npm run import-invoice` + the 999210 import** | T-28, T-29, T-30 | **7** | **new** |
@@ -171,7 +171,7 @@ Each ticket states a **goal**, the **files** it touches (new vs existing, and fo
 
 **Files.** New: `backend/src/invoice/reconcile.ts`, `backend/src/invoice/importInvoice.ts`, `backend/src/invoice/report.ts` + tests.
 
-**Dependencies.** T-27.
+**Dependencies.** T-26, T-27. `importInvoice`'s two card/truck lookups (`getCardByNumber`, `getTruckByUnitNumber`) are T-26's catalog functions — the plain, unambiguous FK resolution needed to satisfy `fuel_stops.card_id`/`express_charges.truck_id`'s NOT NULL constraints. The harder resolution (assignment history, disagreement flags) stays T-29's job.
 
 **Definition of done.**
 - [ ] 999210 balances: TA $48,450.68 + DF $845.40 + S $90.50 + Express $1,543.13 = **$50,929.71**, and gallons reconcile per code (8,733.11 TA / 174.43 DF).
