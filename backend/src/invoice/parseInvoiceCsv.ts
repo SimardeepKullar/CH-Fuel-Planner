@@ -455,8 +455,8 @@ export function parseInvoiceRecords(
  * `parseInvoicePdf` for the fallback). Tests run against a committed
  * synthetic fixture plus a real invoice, if one is present locally at
  * `data/bvd-invoices/` (gitignored — never committed; see
- * `backend/test/fixtures/invoices/README.md` for why, and for how to build
- * a real fixture from a portal download).
+ * `docs/BUILD-PLAN-v2.md` step 27.1 for why, and for how to build a real
+ * fixture from a portal download).
  */
 export function parseInvoiceCsv(
   input: Buffer | string,

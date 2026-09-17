@@ -145,11 +145,13 @@ The temptation to fold `trucks` into v1's `truck_profiles` must be resisted: a p
 
 **Goal.** Invoice metadata and printed totals, separated from the data rows.
 
-**Files.** New: `backend/src/invoice/parseInvoiceCsv.ts` + test, `backend/test/fixtures/invoices/999210.csv`.
+**Files.** New: `backend/src/invoice/parseInvoiceCsv.ts` + test, `backend/test/fixtures/invoices/sample-redacted.csv` (synthetic; the real invoice 999210 lives locally in gitignored `data/bvd-invoices/`, never committed — see **Fixtures** below).
 
 **Logic.** Read the header block (invoice number, period start/end, invoice date, due date, both party addresses) and the printed per-code totals block. The real CSV export carries no such header block itself (it opens straight into `Fuel Card Transactions`), so the fixture prepends one, labelled-row style, from this document's already-verified §A5 figures — the same technique as v1's `parseBvdCsv` metadata row (`Company Id`/`Effective Date`, T-06 step 6.1). Normalise column headers by trimming, uppercasing and collapsing whitespace — same discipline as `parseBvdCsv`.
 
 **Trust the printed figures as given.** They are the reconciliation target; the parser records them, it never recomputes them. Same rule as v1's `YOUR PRICE`: a supplier's number is theirs.
+
+**Fixtures.** `backend/test/fixtures/invoices/` holds only synthetic, invented data — never a real invoice, regardless of repo visibility (root `.gitignore`). `sample-redacted.csv`/`sample-redacted.pdf` carry the structural coverage this step and step 27.4 test against: header parsing, product-line validation, 4dp precision, grouping, express rows, and the CSV/PDF parsers' shared output shape. A **real** invoice carries real per-driver, per-transaction financial data and belongs in the repo-root `data/bvd-invoices/` instead — gitignored in full, unlike v1's already-committed `data/bvd/` price-sheet corpus. Drop a real invoice there locally (e.g. `999210.csv`) to exercise the `describe` blocks that assert exact real figures (header, printed totals, known regressions); they check for the file and skip automatically when it's absent, the same way `DATABASE_URL`-gated integration tests do.
 
 **Tests.**
 - 999210 yields number `999210`, period `2026-09-03`→`2026-09-09`, invoice date `2026-09-10`, due `2026-09-11`.
@@ -201,7 +203,9 @@ This is the ticket's whole reason for existing. The legacy sheet recorded `A2520
 
 **Logic.** Express rows have their own shape: date, express code, tractor text, optional driver text, amount, fee, total, payee, note, category. **Every row carries a flat $3.00 fee** — assert it rather than assuming it, because it is the kind of constant that changes without notice.
 
-The PDF path produces the **same output type** as the CSV path, so everything downstream is oblivious. It is a fallback (D13) and is expected to be the source of balance failures, which is precisely why T-28 exists before anything is written.
+A fixture built from a real portal download needs one adjustment here: the raw export's express section carries no `TRACTOR`/`DRIVER` columns — just `DATE, EXPRESS CODE NUMBER, AUTH CODES, AMOUNT CASHED, FEE, TOTAL, CUR, PAYEE, NOTES`. Insert those two columns after `AUTH CODES`, matched by express code number against §A19's sample table where a row is documented there, and leave both genuinely blank — never guessed — for any real row that isn't. Every real row is still needed even when undocumented, since dropping one breaks the printed express/grand totals.
+
+The PDF path produces the **same output type** as the CSV path, so everything downstream is oblivious. It is a fallback (D13) and is expected to be the source of balance failures, which is precisely why T-28 exists before anything is written. A PDF fixture may be a smaller, curated subset of the invoice rather than a full rebuild, since the PDF path is best-effort — reconciliation tests that need the invoice to balance on its own should use the CSV fixture instead.
 
 **Tests.**
 - The four A19 express rows parse, including the blank-driver row at $200.00 + $3.00 = $203.00.

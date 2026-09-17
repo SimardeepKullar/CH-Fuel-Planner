@@ -146,11 +146,11 @@ Each ticket states a **goal**, the **files** it touches (new vs existing, and fo
 
 **Goal.** Bytes → header metadata + product lines + express rows, grouped into stops by base auth code. Pure, no I/O.
 
-**Files.** New: `backend/src/invoice/parseInvoiceCsv.ts`, `parseInvoicePdf.ts`, `groupByAuthCode.ts` + tests, `backend/test/fixtures/invoices/999210.csv`.
+**Files.** New: `backend/src/invoice/parseInvoiceCsv.ts`, `parseInvoicePdf.ts`, `groupByAuthCode.ts` + tests, `backend/test/fixtures/invoices/sample-redacted.csv` (synthetic; the real invoice 999210 lives locally in gitignored `data/bvd-invoices/`, never committed — see `docs/BUILD-PLAN-v2.md` step 27.1).
 
 **Dependencies.** T-25.
 
-**Note (supersedes an earlier "Excel" framing, D13).** The BVD portal's actual invoice download, verified against a real download of invoice 999210, is a CSV transaction export — column headers, no letterhead — not an `.xlsx` workbook. `parseInvoiceCsv.ts` reuses `csv-parse` (already a dependency, same as v1's `parseBvdCsv.ts`); no new binary-format library is needed. The fixture's transaction/express/grand-totals rows are the real portal export verbatim; its header metadata block (invoice number, period, dates, both addresses) is prepended from this document's already-verified §A5 figures, in the same labelled-row style `parseBvdCsv.ts` uses for `Company Id`/`Effective Date`, since the raw export carries no such block itself.
+**Note (supersedes an earlier "Excel" framing, D13).** The BVD portal's actual invoice download, verified against a real download of invoice 999210, is a CSV transaction export — column headers, no letterhead — not an `.xlsx` workbook. `parseInvoiceCsv.ts` reuses `csv-parse` (already a dependency, same as v1's `parseBvdCsv.ts`); no new binary-format library is needed. The committed `sample-redacted.csv` fixture is synthetic, invented data shaped like that export — never the real portal export, which stays local-only in gitignored `data/bvd-invoices/` (see step 27.1's **Fixtures** note in `BUILD-PLAN-v2.md`). Its header metadata block (invoice number, period, dates, both addresses) is prepended from this document's already-verified §A5 figures, in the same labelled-row style `parseBvdCsv.ts` uses for `Company Id`/`Effective Date`, since the raw export carries no such block itself.
 
 **Definition of done.**
 - [ ] Invoice 999210 parses to its header (number, period 2026-09-03→09, invoice date 09-10, due 09-11) and its printed per-code totals.
