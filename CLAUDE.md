@@ -101,6 +101,7 @@ If a step cannot be finished, say so and leave it out explicitly. Do not narrow 
 - Tests are co-located as `*.test.ts` beside the unit. Anything needing a database goes in `backend/test/integration/` and skips when `DATABASE_URL` is unset.
 - **Optimiser strategies are pure** — no database, no HTTP, no clock. Their whole suite must run with no container and no network.
 - Provider tests run offline from recorded fixtures in `backend/test/fixtures/ors/`, committed with ODbL attribution.
+- Invoice fixtures in `backend/test/fixtures/invoices/` are synthetic only, committed regardless of repo visibility. A real BVD invoice belongs in gitignored `data/bvd-invoices/` instead; tests asserting its exact figures check for the file there and skip automatically when it's absent, the same way `DATABASE_URL`-gated integration tests do.
 - "Pass" means an assertion, not an eyeball — except the one visual check in T-04 step 4.2.
 - Write the test before the fix for any bug found mid-ticket.
 
