@@ -32,6 +32,15 @@ export interface ImportReport {
    * card/truck lookup misses, all in one shape. Empty iff the invoice
    * balances and every lookup resolved. */
   rejections: NormalizedRejection[];
+  /** Station text (e.g. "SAMPLE #1") that didn't resolve to a `stations`
+   * row by store number (T-29). Named, not silently dropped — but never a
+   * rejection: an unresolved station leaves `fuel_stops.station_id` null
+   * and still promotes (CLAUDE.md: never guessed, never quarantined for it). */
+  stationMisses: string[];
+  /** Card numbers resolved to a driver with no `truck_assignments` row
+   * covering the stop's timestamp (T-29) — `fuel_stops.truck_id` is left
+   * null rather than guessed. Also never a rejection. */
+  truckAssignmentMisses: string[];
 }
 
 export interface BuildImportReportInput {
@@ -47,6 +56,8 @@ export interface BuildImportReportInput {
   reconcileResult: ReconcileResult;
   cardMisses: readonly FuelStopGroup[];
   truckUnitMisses: readonly ExpressRow[];
+  stationMisses?: readonly string[];
+  truckAssignmentMisses?: readonly string[];
 }
 
 function imbalanceRejections(
@@ -115,5 +126,7 @@ export function buildImportReport(input: BuildImportReportInput): ImportReport {
     unknownCardNumbers: cardMisses.map((g) => g.cardNumber),
     unknownTruckUnits: truckUnitMisses.map((r) => r.unitRaw),
     rejections,
+    stationMisses: [...(input.stationMisses ?? [])],
+    truckAssignmentMisses: [...(input.truckAssignmentMisses ?? [])],
   };
 }
