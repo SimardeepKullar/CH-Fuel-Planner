@@ -91,6 +91,13 @@ async function resolveCardMisses(
   return { cardIds, misses };
 }
 
+/**
+ * A genuinely blank tractor/unit (D20) has no truck to resolve and is never
+ * a miss — `express_charges.truck_id`/`unit_raw` are nullable for exactly
+ * this, the same way a blank driver name resolves to a null `driver_id`
+ * without ever quarantining (`resolveExpressDriver`). Only a *present*
+ * unit number this fleet doesn't recognise lands in `misses`.
+ */
 async function resolveTruckUnitMisses(
   pool: Pool,
   expressRows: readonly ExpressRow[],
@@ -99,7 +106,6 @@ async function resolveTruckUnitMisses(
   const misses: ExpressRow[] = [];
   for (const row of expressRows) {
     if (row.unitRaw === null) {
-      misses.push(row);
       continue;
     }
     if (truckIds.has(row.unitRaw)) {
@@ -277,7 +283,7 @@ async function insertExpressCharge(
   client: PoolClient,
   invoiceId: string,
   row: ExpressRow,
-  truckId: string,
+  truckId: string | null,
   driverResolution: ExpressDriverResolution,
 ): Promise<void> {
   await client.query(
@@ -335,9 +341,11 @@ async function insertInvoiceRejections(
  * from the card's driver and that driver's truck assignment (T-29's
  * `resolveTruckForStop`/`resolveExpressDriver`) — never from `unit_raw`/
  * `driver_name_raw`, which are stored verbatim alongside them and never
- * overwritten. `express_charges.truck_id` is NOT NULL and has no card to
- * resolve from, so it stays a plain, unambiguous unit-number lookup done
- * here directly.
+ * overwritten. `express_charges` has no card to resolve a truck from, so
+ * that one is a plain, unambiguous unit-number lookup done here directly —
+ * except a genuinely blank unit (D20), which leaves `truck_id` null rather
+ * than quarantining, the same way a blank driver name leaves `driver_id`
+ * null.
  *
  * No HTTP, no argv, no printing — the CLI in cli/importInvoice.ts (T-31) is
  * the only caller that touches stdout.
@@ -372,6 +380,9 @@ export async function importInvoice(
   const reconcileResult = reconcile(groups, parsed.expressRows, parsed.printedTotals);
   const { cardIds, misses: cardMisses } = await resolveCardMisses(pool, groups);
   const { truckIds, misses: truckUnitMisses } = await resolveTruckUnitMisses(pool, parsed.expressRows);
+  const expressBlankUnits = parsed.expressRows
+    .filter((r) => r.unitRaw === null)
+    .map((r) => r.expressCode);
   const {
     resolutions: fuelStopResolutions,
     stationMisses,
@@ -389,6 +400,7 @@ export async function importInvoice(
     truckUnitMisses,
     stationMisses,
     truckAssignmentMisses,
+    expressBlankUnits,
   });
 
   if (existingId) {
@@ -422,9 +434,13 @@ export async function importInvoice(
       }
       for (let i = 0; i < parsed.expressRows.length; i++) {
         const row = parsed.expressRows[i]!;
-        const truckId = row.unitRaw !== null ? truckIds.get(row.unitRaw) : undefined;
-        if (!truckId) {
-          throw new Error(`invariant violated: no resolved truck for express row ${row.expressCode}`);
+        let truckId: string | null = null;
+        if (row.unitRaw !== null) {
+          const resolved = truckIds.get(row.unitRaw);
+          if (!resolved) {
+            throw new Error(`invariant violated: no resolved truck for express row ${row.expressCode}`);
+          }
+          truckId = resolved;
         }
         const driverResolution = expressDriverResolutions[i]!;
         await insertExpressCharge(client, invoiceId, row, truckId, driverResolution);

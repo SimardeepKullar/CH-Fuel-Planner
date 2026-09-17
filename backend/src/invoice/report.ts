@@ -9,8 +9,7 @@ export type ImportRejectionCode =
   | "GALLONS_IMBALANCE"
   | "GRAND_TOTAL_IMBALANCE"
   | "UNKNOWN_CARD"
-  | "UNKNOWN_TRUCK_UNIT"
-  | "MISSING_UNIT";
+  | "UNKNOWN_TRUCK_UNIT";
 
 export interface NormalizedRejection {
   lineNumber: number;
@@ -26,7 +25,7 @@ export interface ImportReport {
   reconcile: ReconcileResult;
   parserRejectionCount: number;
   unknownCardNumbers: string[];
-  unknownTruckUnits: (string | null)[];
+  unknownTruckUnits: string[];
   /** Every reason this invoice would quarantine, ready to insert into
    * `invoice_rejections` — parser rejections, reconcile imbalances, and
    * card/truck lookup misses, all in one shape. Empty iff the invoice
@@ -41,6 +40,11 @@ export interface ImportReport {
    * covering the stop's timestamp (T-29) — `fuel_stops.truck_id` is left
    * null rather than guessed. Also never a rejection. */
   truckAssignmentMisses: string[];
+  /** Express codes of rows with no tractor/unit text at all (D20) —
+   * `express_charges.truck_id` is left null rather than guessed. Never a
+   * rejection, distinct from `unknownTruckUnits` (a present unit number
+   * this fleet doesn't recognise, which does quarantine). */
+  expressBlankUnits: string[];
 }
 
 export interface BuildImportReportInput {
@@ -58,6 +62,7 @@ export interface BuildImportReportInput {
   truckUnitMisses: readonly ExpressRow[];
   stationMisses?: readonly string[];
   truckAssignmentMisses?: readonly string[];
+  expressBlankUnits?: readonly string[];
 }
 
 function imbalanceRejections(
@@ -95,15 +100,16 @@ export function buildImportReport(input: BuildImportReportInput): ImportReport {
       code: "UNKNOWN_CARD" as const,
       message: `unknown card number: "${g.cardNumber}"`,
     })),
-    ...truckUnitMisses.map((r): NormalizedRejection => {
-      const code: "MISSING_UNIT" | "UNKNOWN_TRUCK_UNIT" =
-        r.unitRaw === null ? "MISSING_UNIT" : "UNKNOWN_TRUCK_UNIT";
-      const message =
-        r.unitRaw === null
-          ? "express row has no tractor/unit text"
-          : `unknown truck unit number: "${r.unitRaw}"`;
-      return { lineNumber: r.lineNumber, authCode: r.expressCode, code, message };
-    }),
+    // A blank unit never reaches here — resolveTruckUnitMisses (importInvoice.ts)
+    // filters those out before this list is built (D20).
+    ...truckUnitMisses.map(
+      (r): NormalizedRejection => ({
+        lineNumber: r.lineNumber,
+        authCode: r.expressCode,
+        code: "UNKNOWN_TRUCK_UNIT",
+        message: `unknown truck unit number: "${r.unitRaw}"`,
+      }),
+    ),
   ];
 
   if (reconcileResult.grandTotal.deltaCents !== 0) {
@@ -124,9 +130,10 @@ export function buildImportReport(input: BuildImportReportInput): ImportReport {
     reconcile: reconcileResult,
     parserRejectionCount: input.parserRejections.length,
     unknownCardNumbers: cardMisses.map((g) => g.cardNumber),
-    unknownTruckUnits: truckUnitMisses.map((r) => r.unitRaw),
+    unknownTruckUnits: truckUnitMisses.map((r) => r.unitRaw!),
     rejections,
     stationMisses: [...(input.stationMisses ?? [])],
     truckAssignmentMisses: [...(input.truckAssignmentMisses ?? [])],
+    expressBlankUnits: [...(input.expressBlankUnits ?? [])],
   };
 }

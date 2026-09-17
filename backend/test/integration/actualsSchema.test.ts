@@ -30,7 +30,7 @@ describe.skipIf(!hasDatabase)("0003_actuals.sql (integration)", () => {
     await adminPool.end();
   });
 
-  it("applies all five migrations, and a second run is a no-op", async () => {
+  it("applies all six migrations, and a second run is a no-op", async () => {
     const first = await runMigrations(scopedPool, migrationsDir);
     expect(first.every((r) => !r.applied)).toBe(true);
     const { rows } = await scopedPool.query<{ filename: string }>(
@@ -42,6 +42,7 @@ describe.skipIf(!hasDatabase)("0003_actuals.sql (integration)", () => {
       "0003_actuals.sql",
       "0004_actuals_seed.sql",
       "0005_anomaly_thresholds_seed.sql",
+      "0006_express_charges_truck_nullable.sql",
     ]);
   });
 

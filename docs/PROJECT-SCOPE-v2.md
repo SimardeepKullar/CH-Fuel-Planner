@@ -262,7 +262,7 @@ Additive to v1 §12. Same rules: `uuid` for URL-exposed rows, composite natural 
 | `invoice_totals` | Per product code as printed: `(invoice_id, product_code, gallons, amount_usd)`. The reconciliation target. |
 | `fuel_stops` | `uuid`, → `invoice_id`, `base_auth_code`, `occurred_at`, → `card_id`, resolved `truck_id` / `driver_id`, **`unit_raw`**, **`driver_name_raw`**, → `station_id`, `total_usd`, `receipt_status`. |
 | `fuel_stop_lines` | `(fuel_stop_id, product_code, gallons, retail_usd_per_gal, billed_usd_per_gal, amount_usd)`. 4dp prices stored as `numeric(9,4)`. **Never** derive the stop total by summing only diesel. |
-| `express_charges` | `(invoice_id, express_code)`, `occurred_at`, `truck_id` + `unit_raw`, nullable `driver_id` + `driver_name_raw`, `amount_usd`, `fee_usd` (flat 3.00), `total_usd`, `payee`, `note`, `category`, `match_status`. |
+| `express_charges` | `(invoice_id, express_code)`, `occurred_at`, nullable `truck_id` + `unit_raw` (D20), nullable `driver_id` + `driver_name_raw`, `amount_usd`, `fee_usd` (flat 3.00), `total_usd`, `payee`, `note`, `category`, `match_status`. |
 | `receipt_checks` | `(fuel_stop_id, checked_by, checked_at, outcome)` — append-only; the queue's audit trail. |
 | `anomalies` | `(subject_type, subject_id, rule, severity, detail jsonb, detected_at, dismissed_at)`. Thresholds read from settings, never hard-coded. |
 | `anomaly_thresholds` | Editable in Settings. |
@@ -354,6 +354,7 @@ Exclusions are named, not hidden: split fills with no single planned stop to mat
 | **D17** | **The Receipt Queue is built as an exceptions queue from day one.** | A18 Q3 may automate the check; the layout must not assume every item needs a decision. |
 | **D18** | **`unit_number` is `text`, stored exactly as the fleet writes it. Supersedes D6.** | D6 chose `integer` with a three-digit display pad on the evidence of `022`-style numbers. The real roster (A19) runs `031`…`073` **and** `101`, `1012`…`1023`. A three-digit pad cannot render a four-digit unit, and `integer` loses the leading zero that distinguishes `031` from `31` on the invoice. `formatUnitNumber()` survives as a validator and normaliser, not a padder. |
 | **D19** | **`fuel_cards.driver_id` is a permanent, direct link — not effective-dated.** A separate `truck_assignments(driver_id, truck_id, effective_from, effective_to)` carries the history that actually changes. | Cards are issued one-to-one to a driver and never reassigned; a lost card becomes a new `card_number`, not a repointed `driver_id`. Trucks are what occasionally change (a repair swap), so that's the relationship that needs a date range. Bundling both into one `card_assignments` row (the original A11 design) would have forced a full new row — repeating the unchanged card/driver link — every time dispatch moved a driver to a different truck. |
+| **D20** | **`express_charges.truck_id` and `unit_raw` are nullable. Supersedes the original A11 design, which had `truck_id NOT NULL`.** | The real 999210 invoice has Express Codes rows with no tractor/unit text at all — real data, discovered importing it for T-31, the same real state as A19's blank-driver row one column over. `truck_id NOT NULL` made such a row structurally impossible to insert, forcing the whole invoice to quarantine over a blank field that isn't an error. `truck_id`/`unit_raw` now follow `driver_id`'s existing nullability: a blank unit leaves `truck_id` null and is named in the import report, never guessed and never a rejection. A unit number that *is* present but unrecognised still quarantines (`UNKNOWN_TRUCK_UNIT`) — that is a real data problem, unlike a blank one. |
 
 ---
 
@@ -435,3 +436,5 @@ Use these real values instead of placeholders.
 | 2026-09-08 07:43 | 6570949 | 064 | Jugraj | $457.60 | $3.00 | $460.60 | Lumper |
 | 2026-09-08 10:12 | 6571780 | 073 | *(blank)* | $200.00 | $3.00 | $203.00 | lumper |
 | 2026-09-08 18:48 | 6574941 | 1017 | rajinder | $62.18 | $3.00 | $65.18 | repair |
+
+A blank *tractor* is also real, observed data on 999210 (two rows) — not shown above since it's the driver-name column that has a documented sample, but the same "real state, not a defect" rule applies one column over (D20).
