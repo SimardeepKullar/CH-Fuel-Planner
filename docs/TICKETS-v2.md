@@ -231,7 +231,7 @@ Each ticket states a **goal**, the **files** it touches (new vs existing, and fo
 
 **Goal.** One command imports a real invoice end to end, and the database holds a week of real actuals.
 
-**Files.** New: `backend/src/cli/importInvoice.ts`. Modified: root `package.json`.
+**Files.** New: `backend/src/cli/importInvoice.ts`, `migrations/0006_express_charges_truck_nullable.sql`. Modified: root `package.json`, `backend/src/db/schema.ts`, `backend/src/invoice/importInvoice.ts`, `backend/src/invoice/report.ts`.
 
 **Dependencies.** T-28, T-29, T-30.
 

@@ -364,7 +364,9 @@ Plus: a normal stop (41.67 gal, matching unit, 3% DEF) triggers **nothing** — 
 
 **Goal.** argv and stdout, nothing else.
 
-**Files.** New: `backend/src/cli/importInvoice.ts`. Modified: root `package.json`.
+**Files.** New: `backend/src/cli/importInvoice.ts`, `migrations/0006_express_charges_truck_nullable.sql`. Modified: root `package.json`, `backend/src/db/schema.ts`, `backend/src/invoice/importInvoice.ts`, `backend/src/invoice/report.ts`.
+
+**Logic.** Importing the real 999210 invoice surfaced a schema gap: two Express Codes rows have no tractor/unit text at all (real data, the driver-name blank one column over), but `express_charges.truck_id` was `NOT NULL` — structurally impossible to insert, forcing quarantine over a blank field that isn't an error. `migrations/0006` drops `NOT NULL` from `truck_id` and `unit_raw`, matching `driver_id`'s existing nullability (PROJECT-SCOPE-v2.md D20); `resolveTruckUnitMisses` stops treating a blank unit as a lookup miss, and the report gains `expressBlankUnits` alongside `stationMisses`/`truckAssignmentMisses` so the blank is named, never guessed, never silently dropped. A unit number that's *present but unrecognised* still quarantines (`UNKNOWN_TRUCK_UNIT`) — that's a real data problem, unlike a blank one.
 
 **Tests.**
 - The command prints the report and exits 0 on a balanced file.
@@ -385,7 +387,7 @@ Plus: a normal stop (41.67 gal, matching unit, 3% DEF) triggers **nothing** — 
 - `Σ fuel_stop_lines.amount_usd + Σ express_charges.total_usd = 50929.71`.
 - `Σ gallons WHERE product_code='TA' = 8733.11`; `DF = 174.43`.
 - Gallons-weighted average billed price = **5.55** to 2dp.
-- Receipt status counts: 48 confirmed of 60.
+- All 60 stops are `receipt_status='pending'` — `importInvoice()` never writes `receipt_checks` (that writer is T-35's `POST /receipt-checks`). A5's "48 of 60 confirmed" is asserted once that exists, against the Overview endpoint (T-33's own DoD already covers it) — not here.
 - Anomaly count matches T-30's expected figure.
 - Every stop has a resolved truck or a named exclusion; none has a guessed one.
 - **Pass:** all seven.
