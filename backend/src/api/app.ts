@@ -1,3 +1,6 @@
+import type { Pool } from "pg";
+import { getPool } from "../db/pool.js";
+import { handleGetTransaction, handleListTransactions } from "./routes/transactions.js";
 import { problemResponse } from "./problem.js";
 
 /**
@@ -5,8 +8,11 @@ import { problemResponse } from "./problem.js";
  * returns a standard `Response`, so the whole thing mounts in one Next route
  * file and is exercisable in a unit test with no server and no session.
  *
- * This is a stub: T-16 replaces the two hard-coded branches with a real
- * route table (`GET /plans/{id}`, `POST /plans`, ...).
+ * This is still a stub for most of the surface: T-16 replaces the
+ * hard-coded branches below with a real route table (`GET /plans/{id}`,
+ * `POST /plans`, ...). T-32 adds `/transactions` directly to this stub
+ * rather than waiting on that table — TICKETS-v2.md's critical path does
+ * not route T-32 through T-16.
  */
 export interface CreateAppOptions {
   /**
@@ -19,6 +25,13 @@ export interface CreateAppOptions {
    * than every test needing a session to exist.
    */
   authRequired?: boolean;
+  /**
+   * Injected for tests (a schema-scoped pool over a fixture). Production
+   * (`frontend/src/app/api/v1/[[...path]]/route.ts`) omits this and each
+   * DB-backed route resolves `getPool()` lazily instead — so a request for
+   * `/health` alone never requires `DATABASE_URL` to be set.
+   */
+  pool?: Pool;
 }
 
 export interface App {
@@ -40,6 +53,15 @@ export function createApp(options: CreateAppOptions = {}): App {
           status: 200,
           headers: { "content-type": "application/json" },
         });
+      }
+
+      if (path === "/transactions" && request.method === "GET") {
+        return handleListTransactions(options.pool ?? getPool(), url);
+      }
+
+      const transactionDetailMatch = /^\/transactions\/([^/]+)$/.exec(path);
+      if (transactionDetailMatch && request.method === "GET") {
+        return handleGetTransaction(options.pool ?? getPool(), transactionDetailMatch[1]!, url);
       }
 
       return problemResponse({
