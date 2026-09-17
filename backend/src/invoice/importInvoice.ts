@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import type { Pool, PoolClient } from "pg";
 import { getCardByNumber } from "../catalog/cards.js";
 import { getTruckByUnitNumber } from "../catalog/trucks.js";
+import { resolveExpressDriver, type ExpressDriverResolution } from "../resolve/resolveDriver.js";
+import { resolveStationByName } from "../resolve/resolveStation.js";
+import { resolveTruckForStop } from "../resolve/resolveTruck.js";
 import { groupByAuthCode, type FuelStopGroup } from "./groupByAuthCode.js";
 import { parseInvoiceCsv, type ParsedInvoice } from "./parseInvoiceCsv.js";
 import type { ExpressRow } from "./parseExpressRows.js";
@@ -111,6 +114,71 @@ async function resolveTruckUnitMisses(
   return { truckIds, misses };
 }
 
+interface FuelStopResolution {
+  truckId: string | null;
+  driverId: string | null;
+  stationId: string | null;
+}
+
+/**
+ * T-29: the truck/driver come from the card's assignment (never `unit_raw`),
+ * the station from the entered site text (never BVD's `SITE` field). Neither
+ * miss quarantines the invoice — a card with no assignment at the stop's
+ * instant, or a station with no recognisable/known store number, leaves the
+ * field null and is named in the report instead (CLAUDE.md: never a guess,
+ * never silently dropped). Only groups whose card resolved are looked up
+ * here; an unresolved card is already a quarantining rejection on its own.
+ */
+async function resolveFuelStopFields(
+  pool: Pool,
+  groups: readonly FuelStopGroup[],
+  cardIds: ReadonlyMap<string, string>,
+): Promise<{
+  resolutions: ReadonlyMap<string, FuelStopResolution>;
+  stationMisses: string[];
+  truckAssignmentMisses: string[];
+}> {
+  const resolutions = new Map<string, FuelStopResolution>();
+  const stationMisses: string[] = [];
+  const truckAssignmentMisses: string[] = [];
+
+  for (const group of groups) {
+    const cardId = cardIds.get(group.cardNumber);
+    if (!cardId) {
+      continue;
+    }
+
+    const occurredAt = new Date(asUtcTimestamp(group.occurredAt));
+    const truck = await resolveTruckForStop(pool, cardId, occurredAt, group.unitRaw);
+    if (truck.truckId === null) {
+      truckAssignmentMisses.push(group.cardNumber);
+    }
+
+    const stationId = await resolveStationByName(pool, group.stationNameRaw);
+    if (stationId === null) {
+      stationMisses.push(group.stationNameRaw);
+    }
+
+    resolutions.set(group.baseAuthCode, { truckId: truck.truckId, driverId: truck.driverId, stationId });
+  }
+
+  return { resolutions, stationMisses, truckAssignmentMisses };
+}
+
+/** T-29: express-charge driver names resolve through the same alias table as
+ * fuel stops, independently per row — order-aligned with `expressRows` since
+ * `express_code` carries no uniqueness guarantee to key a map on. */
+async function resolveExpressChargeDrivers(
+  pool: Pool,
+  expressRows: readonly ExpressRow[],
+): Promise<ExpressDriverResolution[]> {
+  const resolutions: ExpressDriverResolution[] = [];
+  for (const row of expressRows) {
+    resolutions.push(await resolveExpressDriver(pool, row.driverNameRaw));
+  }
+  return resolutions;
+}
+
 async function insertInvoiceRow(
   client: PoolClient,
   parsed: ParsedInvoice,
@@ -169,20 +237,24 @@ async function insertFuelStop(
   invoiceId: string,
   group: FuelStopGroup,
   cardId: string,
+  resolution: FuelStopResolution,
 ): Promise<void> {
   const { rows } = await client.query<{ id: string }>(
     `INSERT INTO fuel_stops
-       (invoice_id, base_auth_code, occurred_at, card_id, unit_raw,
-        driver_name_raw, total_usd)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+       (invoice_id, base_auth_code, occurred_at, card_id, truck_id, driver_id,
+        unit_raw, driver_name_raw, station_id, total_usd)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      RETURNING id`,
     [
       invoiceId,
       group.baseAuthCode,
       asUtcTimestamp(group.occurredAt),
       cardId,
+      resolution.truckId,
+      resolution.driverId,
       group.unitRaw,
       group.driverNameRaw,
+      resolution.stationId,
       group.totalUsd,
     ],
   );
@@ -205,18 +277,21 @@ async function insertExpressCharge(
   invoiceId: string,
   row: ExpressRow,
   truckId: string,
+  driverResolution: ExpressDriverResolution,
 ): Promise<void> {
   await client.query(
     `INSERT INTO express_charges
        (invoice_id, express_code, occurred_at, truck_id, unit_raw,
-        driver_name_raw, amount_usd, fee_usd, total_usd, payee, note, category)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        driver_id, driver_name_raw, amount_usd, fee_usd, total_usd, payee, note,
+        category, match_status)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
     [
       invoiceId,
       row.expressCode,
       asUtcTimestamp(row.occurredAt),
       truckId,
       row.unitRaw,
+      driverResolution.driverId,
       row.driverNameRaw,
       row.amountUsd,
       row.feeUsd,
@@ -224,6 +299,7 @@ async function insertExpressCharge(
       row.payee,
       row.note,
       row.category,
+      driverResolution.matchStatus,
     ],
   );
 }
@@ -252,11 +328,13 @@ async function insertInvoiceRejections(
  * has zero child rows in fuel_stops/express_charges, never a partial
  * promote (the schema's own invariant, migrations/0003_actuals.sql).
  *
- * `fuel_stops.truck_id`/`driver_id` are left null here — T-29 resolves them
- * from the card's driver and that driver's truck assignment, and modifies
- * this function to do so. `express_charges.truck_id` is NOT NULL and has no
- * card to resolve from, so it's a plain, unambiguous unit-number lookup
- * done here, not deferred.
+ * `fuel_stops.truck_id`/`driver_id` and `express_charges.driver_id` resolve
+ * from the card's driver and that driver's truck assignment (T-29's
+ * `resolveTruckForStop`/`resolveExpressDriver`) — never from `unit_raw`/
+ * `driver_name_raw`, which are stored verbatim alongside them and never
+ * overwritten. `express_charges.truck_id` is NOT NULL and has no card to
+ * resolve from, so it stays a plain, unambiguous unit-number lookup done
+ * here directly.
  *
  * No HTTP, no argv, no printing — the CLI in cli/importInvoice.ts (T-31) is
  * the only caller that touches stdout.
@@ -291,6 +369,12 @@ export async function importInvoice(
   const reconcileResult = reconcile(groups, parsed.expressRows, parsed.printedTotals);
   const { cardIds, misses: cardMisses } = await resolveCardMisses(pool, groups);
   const { truckIds, misses: truckUnitMisses } = await resolveTruckUnitMisses(pool, parsed.expressRows);
+  const {
+    resolutions: fuelStopResolutions,
+    stationMisses,
+    truckAssignmentMisses,
+  } = await resolveFuelStopFields(pool, groups, cardIds);
+  const expressDriverResolutions = await resolveExpressChargeDrivers(pool, parsed.expressRows);
 
   const report = buildImportReport({
     invoiceNumber: parsed.header.invoiceNumber,
@@ -300,6 +384,8 @@ export async function importInvoice(
     reconcileResult,
     cardMisses,
     truckUnitMisses,
+    stationMisses,
+    truckAssignmentMisses,
   });
 
   if (existingId) {
@@ -325,14 +411,20 @@ export async function importInvoice(
         if (!cardId) {
           throw new Error(`invariant violated: no resolved card for ${group.cardNumber}`);
         }
-        await insertFuelStop(client, invoiceId, group, cardId);
+        const resolution = fuelStopResolutions.get(group.baseAuthCode);
+        if (!resolution) {
+          throw new Error(`invariant violated: no resolution computed for ${group.baseAuthCode}`);
+        }
+        await insertFuelStop(client, invoiceId, group, cardId, resolution);
       }
-      for (const row of parsed.expressRows) {
+      for (let i = 0; i < parsed.expressRows.length; i++) {
+        const row = parsed.expressRows[i]!;
         const truckId = row.unitRaw !== null ? truckIds.get(row.unitRaw) : undefined;
         if (!truckId) {
           throw new Error(`invariant violated: no resolved truck for express row ${row.expressCode}`);
         }
-        await insertExpressCharge(client, invoiceId, row, truckId);
+        const driverResolution = expressDriverResolutions[i]!;
+        await insertExpressCharge(client, invoiceId, row, truckId, driverResolution);
       }
     } else {
       await insertInvoiceRejections(client, invoiceId, report);

@@ -170,6 +170,57 @@ describe.skipIf(!hasDatabase)("importInvoice (integration)", () => {
     errorSpy.mockRestore();
   });
 
+  it("resolves and persists fuel_stops.truck_id/driver_id from the card's assignment, and leaves an unlisted station null with a named exclusion (T-29)", async () => {
+    const { rows: driverRows } = await scopedPool.query<{ id: string }>(
+      "INSERT INTO drivers (display_name) VALUES ('DRIVER ONE') RETURNING id",
+    );
+    const driverId = driverRows[0]!.id;
+    await scopedPool.query("UPDATE fuel_cards SET driver_id = $1 WHERE card_number = '1000001'", [
+      driverId,
+    ]);
+    const { rows: truckRows } = await scopedPool.query<{ id: string }>(
+      "SELECT id FROM trucks WHERE unit_number = '101'",
+    );
+    await scopedPool.query(
+      "INSERT INTO truck_assignments (driver_id, truck_id, effective_from, effective_to) VALUES ($1, $2, '2026-01-01', NULL)",
+      [driverId, truckRows[0]!.id],
+    );
+
+    const result = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "sample-redacted.csv" });
+    expect(result.status).toBe("imported");
+    if (result.status !== "imported") {
+      return;
+    }
+
+    // "SAMPLE #1" (the fixture's station text) has no matching row in
+    // `stations` — an unresolved station never quarantines the invoice, and
+    // is named in the report rather than silently dropped.
+    expect(result.report.stationMisses).toContain("SAMPLE #1");
+
+    const { rows } = await scopedPool.query<{ truck_id: string | null; driver_id: string | null; station_id: string | null }>(
+      "SELECT truck_id, driver_id, station_id FROM fuel_stops WHERE base_auth_code = 'B100001'",
+    );
+    expect(rows[0]?.truck_id).toBe(truckRows[0]!.id);
+    expect(rows[0]?.driver_id).toBe(driverId);
+    expect(rows[0]?.station_id).toBeNull();
+  });
+
+  it("resolves express_charges.driver_id and match_status from the driver name, and lands a miss as unmatched (T-29)", async () => {
+    const result = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "sample-redacted.csv" });
+    expect(result.status).toBe("imported");
+
+    // Neither "DRIVER ONE" (express row 1) nor the blank name (express row
+    // 2) is on the seeded driver roster, so both land unmatched with a null
+    // driver_id — never a guess, never an error.
+    const { rows } = await scopedPool.query<{ driver_id: string | null; match_status: string }>(
+      "SELECT driver_id, match_status FROM express_charges ORDER BY express_code",
+    );
+    expect(rows).toEqual([
+      { driver_id: null, match_status: "unmatched" },
+      { driver_id: null, match_status: "unmatched" },
+    ]);
+  });
+
   describe.skipIf(!hasRealFixture)("real invoice 999210 (local fixture only)", () => {
     it("imports ~60 real stops and balances Σ = 50929.71", async () => {
       // The real invoice's own driver roster (card numbers) isn't in this
