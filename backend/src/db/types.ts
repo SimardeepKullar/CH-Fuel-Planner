@@ -409,10 +409,14 @@ export interface ExpressChargeRow {
   invoice_id: string;
   express_code: string;
   occurred_at: Date;
-  truck_id: string;
-  unit_raw: string;
+  /** Null on every CSV-imported row (no tractor column in that export; 0006). */
+  truck_id: string | null;
+  unit_raw: string | null;
   driver_id: string | null;
   driver_name_raw: string | null;
+  trailer_raw: string | null;
+  cdl_raw: string | null;
+  trip_number_raw: string | null;
   amount_usd: Numeric;
   fee_usd: Numeric;
   total_usd: Numeric;

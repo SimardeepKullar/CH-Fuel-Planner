@@ -319,7 +319,7 @@ Versioned under `/api/v1`, RFC 9457 errors, `?units=` honoured, numbers not stri
 | `GET /transactions/{id}` | A8.4's payload, including `rawValues` and `resolvedFrom`. |
 | `GET /overview?period=` | A8.1's KPI block + trend series + top-spend + anomaly digest. |
 | `GET /receipt-queue` · `POST /receipt-checks` · `POST /receipt-checks/batch` | Queue order, progress counts, one write per decision, append-only. |
-| `GET /express-charges` | Includes `matchStatus` and the fee total. |
+| `GET /express-charges?period=` | One invoice's express rows, oldest first, unpaginated. Each carries `matchStatus`, a null `driver` when unmatched (never a guess), and `payee`/`note`/`category` as stored. `totals` holds `amountUsd`, `feeUsd` and `totalUsd` separately. |
 | `GET /drivers` · `/drivers/{id}` · `/trucks` · `/trucks/{id}` | Period rollups + detail series. |
 | `GET /stations/{id}/billed-prices` | Billed price history per site per day, with a `discrepancy` field against the published file when computable. |
 | `GET /plan-actual?period=` · `GET /plan-actual/backtest?from=&to=` | A14. |
