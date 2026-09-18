@@ -37,6 +37,12 @@ export interface PrintedProductTotal {
   /** Null when the printed row has no gallons figure (e.g. "S", "Express Codes"). */
   gallons: string | null;
   amountUsd: string;
+  /** BVD's own printed "Disc AMT" for this product code — trusted as given,
+   * never recomputed from retail/billed (their internal rounding doesn't
+   * reproduce from the 4dp prices this schema stores). Null when the printed
+   * row has no Disc Amt figure (e.g. "S", which has no per-gallon price to
+   * discount off of). */
+  discountUsd: string | null;
 }
 
 export interface PrintedTotals {
@@ -282,6 +288,7 @@ function buildPrintedTotals(rows: string[][], lineNumbers: number[]): PrintedTot
     const lineNumber = lineNumbers[idx]!;
     const label = (record[0] ?? "").trim();
     const qtyRaw = (record[1] ?? "").trim();
+    const discAmtRaw = (record[8] ?? "").trim();
     const finalAmountRaw = (record[9] ?? "").trim();
 
     if (finalAmountRaw === "") {
@@ -290,9 +297,11 @@ function buildPrintedTotals(rows: string[][], lineNumbers: number[]): PrintedTot
 
     let amountUsd: string;
     let gallons: string | null;
+    let discountUsd: string | null;
     try {
       amountUsd = toDecimalString(finalAmountRaw, 2);
       gallons = qtyRaw === "" ? null : toDecimalString(qtyRaw, 2);
+      discountUsd = discAmtRaw === "" ? null : toDecimalString(discAmtRaw, 2);
     } catch (err) {
       const message = err instanceof DecimalFormatError ? err.message : String(err);
       throw new InvoiceFormatError(`line ${lineNumber}: totals row "${label}": ${message}`);
@@ -302,7 +311,7 @@ function buildPrintedTotals(rows: string[][], lineNumbers: number[]): PrintedTot
       grandTotalUsd = amountUsd;
       return;
     }
-    products.push({ productCode: label, gallons, amountUsd });
+    products.push({ productCode: label, gallons, amountUsd, discountUsd });
   });
 
   if (grandTotalUsd === null) {

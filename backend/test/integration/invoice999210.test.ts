@@ -134,6 +134,19 @@ describe.skipIf(!hasDatabase || !hasRealFixture)("invoice 999210 import (integra
     expect(unweighted.rows[0]!.avg).not.toBe(weighted.rows[0]!.avg);
   });
 
+  it("invoice_totals.discount_usd is BVD's printed Disc AMT (T-33 follow-up), not recomputed from retail/billed", async () => {
+    await runImportInvoiceCli([realFixturePath], scopedPool);
+
+    const { rows } = await scopedPool.query<{ product_code: string; discount_usd: string | null }>(
+      "SELECT product_code, discount_usd FROM invoice_totals ORDER BY product_code",
+    );
+    expect(rows).toEqual([
+      { product_code: "DF", discount_usd: "0.00" },
+      { product_code: "S", discount_usd: null },
+      { product_code: "TA", discount_usd: "5088.61" },
+    ]);
+  });
+
   it("every fuel_stop is receipt_status='pending' — importInvoice() never writes receipt_checks", async () => {
     await runImportInvoiceCli([realFixturePath], scopedPool);
 

@@ -373,6 +373,9 @@ export interface InvoiceTotalRow {
   product_code: string;
   gallons: Numeric;
   amount_usd: Numeric;
+  /** BVD's own printed "Disc AMT" for this product code (T-33 follow-up).
+   * Null for a code with no per-gallon price to discount off of (e.g. "S"). */
+  discount_usd: Numeric | null;
 }
 
 export interface FuelStopRow {

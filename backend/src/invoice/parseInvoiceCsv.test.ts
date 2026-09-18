@@ -44,13 +44,14 @@ describe("parseInvoiceCsv — structural (synthetic fixture)", () => {
     const byCode = Object.fromEntries(
       result.printedTotals.products.map((p) => [p.productCode, p]),
     );
-    expect(byCode.TA).toEqual({ productCode: "TA", gallons: "130.00", amountUsd: "672.17" });
-    expect(byCode.DF).toEqual({ productCode: "DF", gallons: "5.00", amountUsd: "22.50" });
-    expect(byCode.S).toEqual({ productCode: "S", gallons: null, amountUsd: "15.00" });
+    expect(byCode.TA).toEqual({ productCode: "TA", gallons: "130.00", amountUsd: "672.17", discountUsd: "50.83" });
+    expect(byCode.DF).toEqual({ productCode: "DF", gallons: "5.00", amountUsd: "22.50", discountUsd: "0.00" });
+    expect(byCode.S).toEqual({ productCode: "S", gallons: null, amountUsd: "15.00", discountUsd: null });
     expect(byCode["Express Codes"]).toEqual({
       productCode: "Express Codes",
       gallons: null,
       amountUsd: "131.00",
+      discountUsd: null,
     });
     expect(result.printedTotals.grandTotalUsd).toBe("840.67");
   });
@@ -111,13 +112,19 @@ describe.skipIf(!hasRealFixture)("parseInvoiceCsv — real invoice 999210 (local
     const byCode = Object.fromEntries(
       result.printedTotals.products.map((p) => [p.productCode, p]),
     );
-    expect(byCode.TA).toEqual({ productCode: "TA", gallons: "8733.11", amountUsd: "48450.68" });
-    expect(byCode.DF).toEqual({ productCode: "DF", gallons: "174.43", amountUsd: "845.40" });
-    expect(byCode.S).toEqual({ productCode: "S", gallons: null, amountUsd: "90.50" });
+    expect(byCode.TA).toEqual({
+      productCode: "TA",
+      gallons: "8733.11",
+      amountUsd: "48450.68",
+      discountUsd: "5088.61",
+    });
+    expect(byCode.DF).toEqual({ productCode: "DF", gallons: "174.43", amountUsd: "845.40", discountUsd: "0.00" });
+    expect(byCode.S).toEqual({ productCode: "S", gallons: null, amountUsd: "90.50", discountUsd: null });
     expect(byCode["Express Codes"]).toEqual({
       productCode: "Express Codes",
       gallons: null,
       amountUsd: "1543.13",
+      discountUsd: null,
     });
     expect(result.printedTotals.grandTotalUsd).toBe("50929.71");
   });

@@ -27,8 +27,9 @@ const hasRealFixture = existsSync(realFixturePath);
  * stop here is `pending`, and the anomaly count is T-30's real engine
  * output against the current seed roster, not the pre-T-30 "3". Every other
  * figure in this describe block matches A5 exactly, per BUILD-PLAN-v2.md
- * Step 33.1 and TICKETS-v2.md's T-33 DoD — with one further measured
- * exception documented on the discount test below.
+ * Step 33.1 and TICKETS-v2.md's T-33 DoD — including discount, which reads
+ * BVD's own printed "Disc AMT" off `invoice_totals` rather than recomputing
+ * it (see the discount test below for why that distinction matters here).
  */
 describe.skipIf(!hasDatabase || !hasRealFixture)("GET /overview against 999210 (integration, local fixture only)", () => {
   let adminPool: Pool;
@@ -91,22 +92,17 @@ describe.skipIf(!hasDatabase || !hasRealFixture)("GET /overview against 999210 (
   });
 
   /**
-   * A5 prints "$5,088.61" for discount captured. That figure is BVD's own
-   * per-line "Disc AMT" column, which this schema never stores (A11 has no
-   * discount column on `fuel_stop_lines`) — only `retail_usd_per_gal` and
-   * `billed_usd_per_gal` at 4dp. Recomputing gallons × (retail − billed)
-   * from those two stored columns is the only figure this endpoint can
-   * produce, and on the real file it sums to $5,088.65: a 4¢ drift over 60
-   * lines from BVD's own internal rounding, which the printed 4dp prices
-   * don't fully preserve (confirmed by reading the raw CSV's "Disc Rate" /
-   * "Disc AMT" columns directly — ten individual lines are off by a penny
-   * each against gallons × Disc Rate). This is a third measured-not-A5
-   * figure, same category as receipt compliance and anomaly count above,
-   * not a bug in the formula itself.
+   * Discount is read straight off `invoice_totals.discount_usd` — BVD's own
+   * printed per-code "Disc AMT" from the invoice's Grand Totals section,
+   * trusted as given (T-33 follow-up). Recomputing gallons × (retail −
+   * billed) from the 4dp `retail_usd_per_gal`/`billed_usd_per_gal` columns
+   * does *not* reproduce this exactly — it drifts a few cents from BVD's own
+   * internal rounding — which is exactly why this reads the printed figure
+   * instead of deriving it.
    */
-  it("discount is gallons-weighted retail-minus-billed; measured at $5,088.65, a 4¢ rounding drift from A5's printed $5,088.61", async () => {
+  it("discount matches A5's printed $5,088.61 exactly, read from invoice_totals not recomputed", async () => {
     const result = await getOverview(scopedPool, "2026-09-03");
-    expect(result.kpis.discount.totalUsd).toBe(5088.65);
+    expect(result.kpis.discount.totalUsd).toBe(5088.61);
     expect(Math.round(result.kpis.discount.avgUsdPerGal! * 100) / 100).toBe(0.58);
   });
 

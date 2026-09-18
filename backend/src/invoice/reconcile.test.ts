@@ -74,7 +74,7 @@ function baseTotals(overrides: Record<string, PrintedRow> = {}, grandTotalUsd = 
   };
   const merged: Record<string, PrintedRow> = { ...defaults, ...overrides };
   return {
-    products: Object.entries(merged).map(([productCode, row]) => ({ productCode, ...row })),
+    products: Object.entries(merged).map(([productCode, row]) => ({ productCode, discountUsd: null, ...row })),
     grandTotalUsd,
   };
 }
@@ -131,7 +131,7 @@ describe("reconcile — pure", () => {
       ]),
     ];
     const totals: PrintedTotals = {
-      products: [{ productCode: "TA", gallons: "0.30", amountUsd: "0.30" }],
+      products: [{ productCode: "TA", gallons: "0.30", amountUsd: "0.30", discountUsd: null }],
       grandTotalUsd: "0.30",
     };
     const result = reconcile(groups, [], totals);
