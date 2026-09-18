@@ -29,6 +29,7 @@
     "ingest": "tsx backend/src/cli/ingest.ts",
     "backfill": "tsx backend/src/cli/backfill.ts",
     "import-invoice": "tsx backend/src/cli/importInvoice.ts",
+    "backfill-invoices": "tsx backend/src/cli/backfillInvoices.ts",
     "resolve": "tsx backend/src/cli/resolve.ts",
     "reresolve": "tsx backend/src/cli/reresolve.ts",
     "db:reset": "docker compose down -v && docker compose up -d --wait && npm run db:migrate",

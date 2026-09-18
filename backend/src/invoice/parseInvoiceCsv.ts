@@ -423,6 +423,20 @@ export function parseInvoiceRecords(
       mode = "express-awaiting-header";
       continue;
     }
+    // An invoice with zero express charges for the whole file omits the
+    // Express Codes section entirely (marker and all) and goes straight
+    // from the last card's fuel data into Grand Totals — measured against
+    // 11 of 20 real September invoices (T-48). Checked before the generic
+    // fuel-data row handling below, which would otherwise misparse this
+    // marker as a malformed product line; the Grand Totals section still
+    // prints its own "Express Codes" total row (amount 0), which is why
+    // this transition matters — without it, fuel-data mode is still active
+    // when that row is reached and its matching text is misread as the
+    // section marker instead.
+    if (mode === "fuel-data" && first === "Grand Totals") {
+      mode = "totals-awaiting-header";
+      continue;
+    }
     if (mode === "express-data" && first === "Grand Totals") {
       mode = "totals-awaiting-header";
       continue;

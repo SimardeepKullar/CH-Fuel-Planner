@@ -102,6 +102,38 @@ describe("parseInvoiceCsv — structural (synthetic fixture)", () => {
       InvoiceFormatError,
     );
   });
+
+  // Found against the real corpus during T-48's backfill (11 of 20 real
+  // September invoices have zero express charges): when an invoice has none
+  // at all, BVD omits the entire "Express Codes" section — marker, header
+  // and all — and goes straight from the last card's fuel data into "Grand
+  // Totals". The printed totals section still carries an "Express Codes"
+  // row (amount 0), same as when the section is present; only the raw
+  // section itself is missing.
+  it("parses an invoice with zero express charges, where the whole Express Codes section is omitted", () => {
+    const csv = [
+      "Fuel Card Transactions",
+      "Transactions for Card # 1000001",
+      "Auth Code, Driver Name, Unit #, Date, Site #, Site Name, Site City, Prov/ST, Prod, QTY, Retail, Billed, Pre Tax AMT, HST, GST, PST, QST, Disc Rate, Disc AMT, Final AMT, CUR",
+      "B100001-TA,DRIVER ONE,101,2026-01-05 10:00:00,90001,SAMPLE #1,SAMPLETON,TX,TA,50.00,5.5000,5.1234,256.17,0,0,0,0,0.375,18.83,256.17,US,",
+      ",,,,,Transaction Subtotal,,,,50.00,,,256.17,0,0,0,0,,18.83,256.17,,",
+      ",,,,,Card Subtotal,TA,,,50.00,,,256.17,0,0,0,0,0.375,18.83,256.17,US,",
+      ",,,,,,TF,,,0,,,0,0,0,0,0,0,0,0,US,",
+      ",,,,,,Fuel Totals,,,50.00,,,256.17,0,0,0,0,0.375,18.83,256.17,US,",
+      ",,,,,,DF,,,0,,,0,0,0,0,0,0,0,0,US,",
+      ",,,,,,Sub Total,,,,,,256.17,0,0,0,0,,18.83,256.17,US,",
+      "Grand Totals",
+      "PRODUCT, QTY, PRE TAX AMT, HST, GST, PST, QST, DISC RATE, DISC AMT, FINAL AMOUNT, CUR",
+      "TA,50.00,256.17,0,0,0,0,0.375,18.83,256.17,US,",
+      "Express Codes,,,,,,,,,0,US,",
+      "Grand Total,50.00,256.17,0,0,0,0,0.375,18.83,256.17,US,",
+    ].join("\n");
+
+    const result = parseInvoiceCsv(csv, DEFAULT_INVOICE_PRODUCT_CODES, "invoice_100005.csv");
+    expect(result.rejections).toEqual([]);
+    expect(result.expressRows).toEqual([]);
+    expect(result.printedTotals.grandTotalUsd).toBe("256.17");
+  });
 });
 
 describe.skipIf(!hasRealFixture)("parseInvoiceCsv — real invoice 999210 (local fixture only)", () => {
