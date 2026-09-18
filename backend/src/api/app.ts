@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { getPool } from "../db/pool.js";
+import { handleListExpressCharges } from "./routes/expressCharges.js";
 import { handleGetInvoice, handleImportInvoice, handleListInvoices } from "./routes/invoices.js";
 import { handleGetOverview } from "./routes/overview.js";
 import { handleGetReceiptQueue, handlePostReceiptChecks } from "./routes/receipts.js";
@@ -102,6 +103,10 @@ export function createApp(options: CreateAppOptions = {}): App {
 
       if (path === "/overview" && request.method === "GET") {
         return handleGetOverview(options.pool ?? getPool(), url);
+      }
+
+      if (path === "/express-charges" && request.method === "GET") {
+        return handleListExpressCharges(options.pool ?? getPool(), url);
       }
 
       if (path === "/invoices/import" && request.method === "POST") {
