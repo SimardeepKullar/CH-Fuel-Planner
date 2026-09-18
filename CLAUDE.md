@@ -120,6 +120,14 @@ Each of these is a silent-corruption bug, not a crash. They are scattered across
 - Do not "correct" `CH LOGISTIX` to `CH LOGISTICS`. It is what the supplier sends; the ingest records what arrived.
 - The store number comes from `NAME` (`LOVES #368` → 368), **never from `SITE`** — `SITE` matches the store number in 0 of 605 rows.
 
+**Invoices: two exports, two shapes**
+- BVD issues the same invoice twice — an **emailed PDF** and a **portal CSV** — and they are *not* the same shape. **Never reshape one to look like the other.** A fixture built that way is what made this a rule.
+- The **PDF is the fuller** export (D13). It prints the invoice's header table, and it alone carries `TRACTOR`, `TRAILER`, `DRIVER NAME/ID`, `CDL` and `TRIP #` on express rows. Prefer it.
+- The **CSV names the invoice nowhere in its contents** — the number comes from the filename (`invoice_999210.csv`), the period from its own transaction dates, and invoice/due date from period end +1/+2. Verified against the PDF's printed values, not assumed.
+- A CSV import leaves every express row's `unit_raw`/`driver_name_raw` null. That is the file lacking a column, **not** a resolution miss. On a real PDF invoice every express row has a tractor; only the *driver* is ever blank.
+- The PDF's tables are drawn with fills, not ruled lines, so `pdf-parse`'s table extraction finds nothing. Rows are read off the text layer by anchoring on shapes that cannot collide and walking inward — see `parseInvoicePdf.ts`. It prints money with thousands separators; strip them at that boundary, never by loosening `toDecimalString`.
+- A station resolves on the invoice's `Site #` against `stations.site_ref` — the same identifier on both sides — falling back to the store number parsed from the name. This is not an exception to "store number comes from `NAME`, never `SITE`": `site_ref` is never treated as a store number.
+
 **Licensing and retention**
 - **Never store a provider geocode permanently.** 30-day cap. Station coordinates come only from the operator export, OSM, or the Census gazetteer.
 - **Never store price data from the Love's export.** Location and amenity fields only (`StoreType`, `ParkingSpaces`, `DEFLanes`). Those are street prices, not contract prices.

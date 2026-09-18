@@ -348,7 +348,7 @@ function buildPrintedTotals(rows: string[][], lineNumbers: number[]): PrintedTot
  * totals, product lines (accepted and rejected), and express rows. Pure — no
  * database, no HTTP, no clock, no I/O.
  *
- * This is the shared core between the CSV path and the PDF fallback (D13):
+ * This is the shared core between both of BVD's exports (D13):
  * `parseInvoicePdf` reconstructs the same record shape from PDF text and
  * calls this function too, which is what guarantees identical output.
  *

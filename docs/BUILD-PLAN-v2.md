@@ -147,7 +147,9 @@ The temptation to fold `trucks` into v1's `truck_profiles` must be resisted: a p
 
 **Files.** New: `backend/src/invoice/parseInvoiceCsv.ts` + test, `backend/test/fixtures/invoices/sample-redacted.csv` (synthetic; the real invoice 999210 lives locally in gitignored `data/bvd-invoices/`, never committed — see **Fixtures** below).
 
-**Logic.** Read the header block (invoice number, period start/end, invoice date, due date, both party addresses) and the printed per-code totals block. The real CSV export carries no such header block itself (it opens straight into `Fuel Card Transactions`), so the fixture prepends one, labelled-row style, from this document's already-verified §A5 figures — the same technique as v1's `parseBvdCsv` metadata row (`Company Id`/`Effective Date`, T-06 step 6.1). Normalise column headers by trimming, uppercasing and collapsing whitespace — same discipline as `parseBvdCsv`.
+**Logic.** Read the header block (invoice number, period start/end, invoice date, due date, both party addresses) and the printed per-code totals block. The emailed PDF prints the header as a table and it is read from there. **The portal CSV carries no header block at all** (it opens straight into `Fuel Card Transactions`), so on that path the parser derives one: the invoice number from the filename — the number appears nowhere in the contents — the period from the file's own earliest and latest transaction dates, and the invoice/due date as period end +1 and +2. Those rules are not guesses: the same invoice's PDF prints all five outright, and the derived values match it exactly. Normalise column headers by trimming, uppercasing and collapsing whitespace — same discipline as `parseBvdCsv`.
+
+**Never reshape one export to look like the other.** An earlier fixture was built by splicing a header row and two express columns into a CSV, producing a shape BVD does not emit and hiding the difference this step exists to describe. Each export is parsed as it actually arrives.
 
 **Trust the printed figures as given.** They are the reconciliation target; the parser records them, it never recomputes them. Same rule as v1's `YOUR PRICE`: a supplier's number is theirs.
 
@@ -203,9 +205,14 @@ This is the ticket's whole reason for existing. The legacy sheet recorded `A2520
 
 **Logic.** Express rows have their own shape: date, express code, tractor text, optional driver text, amount, fee, total, payee, note, category. **Every row carries a flat $3.00 fee** — assert it rather than assuming it, because it is the kind of constant that changes without notice.
 
-A fixture built from a real portal download needs one adjustment here: the raw export's express section carries no `TRACTOR`/`DRIVER` columns — just `DATE, EXPRESS CODE NUMBER, AUTH CODES, AMOUNT CASHED, FEE, TOTAL, CUR, PAYEE, NOTES`. Insert those two columns after `AUTH CODES`, matched by express code number against §A19's sample table where a row is documented there, and leave both genuinely blank — never guessed — for any real row that isn't. Every real row is still needed even when undocumented, since dropping one breaks the printed express/grand totals.
+The two exports carry genuinely different express sections, and both layouts are parsed as they arrive — neither is padded to look like the other:
 
-The PDF path produces the **same output type** as the CSV path, so everything downstream is oblivious. It is a fallback (D13) and is expected to be the source of balance failures, which is precisely why T-28 exists before anything is written. A PDF fixture may be a smaller, curated subset of the invoice rather than a full rebuild, since the PDF path is best-effort — reconciliation tests that need the invoice to balance on its own should use the CSV fixture instead.
+- **PDF (14 columns):** `DATE, EXP. CODE, AUTH CODE, TRACTOR, TRAILER, DRIVER NAME/ID, CDL, TRIP #, AMOUNT CASHED, FEE, TOTAL, CUR, Payee, NOTES`.
+- **CSV (9 columns):** `DATE, EXPRESS CODE NUMBER, AUTH CODES, AMOUNT CASHED, FEE, TOTAL, CUR, PAYEE, NOTES`.
+
+So tractor and driver are readable only from the PDF. A CSV import leaves `unit_raw`/`driver_name_raw` null for every express row — a property of the file, not a resolution failure (D20).
+
+The PDF path produces the **same output type** as the CSV path, so everything downstream is oblivious. It is the fuller source (D13), not a best-effort fallback: measured against the real 999210 it parses all 86 lines with no rejections and balances to the invoice's own printed $50,929.71, so reconciliation tests can use either fixture. The synthetic PDF fixture describes the same invoice as the synthetic CSV one, which is what lets a test assert the two agree.
 
 **Tests.**
 - The four A19 express rows parse, including the blank-driver row at $200.00 + $3.00 = $203.00.
