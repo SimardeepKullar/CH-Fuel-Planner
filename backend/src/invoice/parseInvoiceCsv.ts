@@ -2,7 +2,13 @@ import { parse } from "csv-parse/sync";
 import { normaliseHeaderCell } from "../ingest/parseBvdCsv.js";
 import { DecimalFormatError, toDecimalString } from "./decimal.js";
 import type { InvoiceProductType } from "./productCode.js";
-import { parseExpressRows, type ExpressRow, type RawExpressRow } from "./parseExpressRows.js";
+import {
+  parseExpressRows,
+  type ExpressLayout,
+  type ExpressRow,
+  type RawExpressRow,
+} from "./parseExpressRows.js";
+import { addIsoDays } from "../ingest/gapReport.js";
 
 export class InvoiceFormatError extends Error {
   constructor(message: string) {
@@ -11,10 +17,10 @@ export class InvoiceFormatError extends Error {
   }
 }
 
-/** Invoice-level metadata. The real BVD export carries none of this — it
- * opens straight into `Fuel Card Transactions` — so every field here comes
- * from a labelled row prepended ahead of it, the same technique v1's
- * `parseBvdCsv` uses for `Company Id`/`Effective Date`. */
+/** Invoice-level metadata. The emailed PDF prints all of it in a header
+ * table; the portal CSV carries none of it and opens straight into
+ * `Fuel Card Transactions`, so on that path it is reconstructed from the
+ * filename and the file's own transaction dates (`synthesizeMetaRow`). */
 export interface InvoiceHeader {
   invoiceNumber: string;
   /** ISO date, "2026-09-03". */
@@ -115,8 +121,22 @@ const FUEL_HEADER = [
   "HST", "GST", "PST", "QST", "DISC RATE", "DISC AMT", "FINAL AMT", "CUR",
 ] as const;
 
-const EXPRESS_HEADER = [
-  "DATE", "EXPRESS CODE NUMBER", "AUTH CODES", "TRACTOR", "DRIVER",
+/**
+ * The emailed PDF's Express Codes header — the only export carrying tractor,
+ * trailer, driver, CDL and trip columns. Measured against a real invoice.
+ */
+const EXPRESS_HEADER_PDF = [
+  "DATE", "EXP. CODE", "AUTH CODE", "TRACTOR", "TRAILER", "DRIVER NAME/ID",
+  "CDL", "TRIP #", "AMOUNT CASHED", "FEE", "TOTAL", "CUR", "PAYEE", "NOTES",
+] as const;
+
+/**
+ * The portal CSV's Express Codes header. Genuinely nine columns — it omits
+ * tractor/trailer/driver/CDL/trip entirely, so a CSV import cannot attribute
+ * an express charge to a truck or driver at all.
+ */
+const EXPRESS_HEADER_CSV = [
+  "DATE", "EXPRESS CODE NUMBER", "AUTH CODES",
   "AMOUNT CASHED", "FEE", "TOTAL", "CUR", "PAYEE", "NOTES",
 ] as const;
 
@@ -124,6 +144,8 @@ const TOTALS_HEADER = [
   "PRODUCT", "QTY", "PRE TAX AMT", "HST", "GST", "PST", "QST", "DISC RATE",
   "DISC AMT", "FINAL AMOUNT", "CUR",
 ] as const;
+
+const CARD_MARKER_PATTERN = /^Transactions for card\s*#?\s*(\S*)/i;
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const TIMESTAMP_PATTERN = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})$/;
@@ -358,6 +380,9 @@ export function parseInvoiceRecords(
     | "totals-data";
   let mode: Mode = "before";
   let currentCard = "";
+  // Set when the express header is matched; the two exports carry genuinely
+  // different column sets, so the layout decides how rows are read.
+  let expressLayout: ExpressLayout = "csv";
 
   const lines: ValidatedInvoiceLine[] = [];
   const rejections: InvoiceLineRejection[] = [];
@@ -381,12 +406,16 @@ export function parseInvoiceRecords(
     }
 
     // A new card section can start from either awaiting-header or fuel-data.
-    if ((mode === "fuel-awaiting-header" || mode === "fuel-data") && first.startsWith("Transactions for Card #")) {
-      const match = /Transactions for Card #\s*(\S+)/.exec(first);
-      if (!match) {
+    // The two exports word this differently — the CSV writes
+    // "Transactions for Card # 2956373", the PDF "Transactions for card"
+    // with the number in its own cell — so both are accepted here.
+    if ((mode === "fuel-awaiting-header" || mode === "fuel-data") && CARD_MARKER_PATTERN.test(first)) {
+      const inline = CARD_MARKER_PATTERN.exec(first)?.[1]?.trim();
+      const cardNumber = inline || (record[1] ?? "").trim();
+      if (!cardNumber) {
         throw new InvoiceFormatError(`line ${lineNumber}: malformed card section marker: "${first}"`);
       }
-      currentCard = match[1]!;
+      currentCard = cardNumber;
       mode = "fuel-awaiting-header";
       continue;
     }
@@ -422,7 +451,11 @@ export function parseInvoiceRecords(
     }
 
     if (mode === "express-awaiting-header") {
-      if (!matchesHeader(record, EXPRESS_HEADER)) {
+      if (matchesHeader(record, EXPRESS_HEADER_PDF)) {
+        expressLayout = "pdf";
+      } else if (matchesHeader(record, EXPRESS_HEADER_CSV)) {
+        expressLayout = "csv";
+      } else {
         throw new InvoiceFormatError(
           `line ${lineNumber}: unexpected express section header shape: ${JSON.stringify(record)}`,
         );
@@ -453,27 +486,108 @@ export function parseInvoiceRecords(
     throw new InvoiceFormatError(`line ${lineNumber}: unexpected content: ${JSON.stringify(record)}`);
   }
 
-  const expressRows = parseExpressRows(rawExpressRows);
+  const expressRows = parseExpressRows(rawExpressRows, expressLayout);
   const printedTotals = buildPrintedTotals(totalsRows, totalsLineNumbers);
 
   return { header, printedTotals, lines, rejections, expressRows };
 }
 
+/** This system bills one supplier to one customer (CLAUDE.md), and the CSV
+ * export names neither. Taken from the emailed PDF's own header blocks. */
+const SUPPLIER_NAME = "BVD Petroleum";
+const SUPPLIER_ADDRESS = "130 Delta Park Blvd, Brampton, ON L6T 5E7";
+const BILL_TO_NAME = "2043733 ONTARIO INC.";
+const BILL_TO_ADDRESS = "5 MATAGAMI STREET, BRAMPTON, ON, Canada, L6Y 0M9";
+
+const DATE_TOKEN_PATTERN = /^(\d{4}-\d{2}-\d{2})/;
+
 /**
- * Parses a BVD invoice CSV export (D13: the primary path; see
- * `parseInvoicePdf` for the fallback). Tests run against a committed
- * synthetic fixture plus a real invoice, if one is present locally at
- * `data/bvd-invoices/` (gitignored — never committed; see
- * `docs/BUILD-PLAN-v2.md` step 27.1 for why, and for how to build a real
- * fixture from a portal download).
+ * The invoice number appears nowhere inside the CSV export — not in a header
+ * block, not on a data row — so the filename it arrived under is the only
+ * source. BVD names them `invoice_999210.csv`; a bare `999210.csv` works too.
+ */
+function invoiceNumberFromFilename(sourceFilename: string): string {
+  const base = sourceFilename
+    .replace(/^.*[\\/]/, "")
+    .replace(/\.[^.]+$/, "")
+    .replace(/^invoice[_-]?/i, "");
+  if (!/^\d+$/.test(base)) {
+    throw new InvoiceFormatError(
+      `cannot determine an invoice number from filename "${sourceFilename}"`,
+    );
+  }
+  return base;
+}
+
+/** Earliest and latest transaction date anywhere in the file. Scans every
+ * cell rather than a fixed column so it works before the section layout has
+ * been established. */
+function scanPeriod(records: readonly string[][]): { start: string; end: string } {
+  let start: string | null = null;
+  let end: string | null = null;
+  for (const record of records) {
+    for (const cell of record) {
+      const match = DATE_TOKEN_PATTERN.exec((cell ?? "").trim());
+      if (!match) continue;
+      const date = match[1]!;
+      if (start === null || date < start) start = date;
+      if (end === null || date > end) end = date;
+    }
+  }
+  if (start === null || end === null) {
+    throw new InvoiceFormatError("no transaction dates found to derive the invoice period");
+  }
+  return { start, end };
+}
+
+/**
+ * Rebuilds the header block the CSV export does not carry, in the labelled
+ * shape `parseHeader` reads. Every value is derived from the file itself or
+ * its name — nothing here is invented:
+ *
+ * - invoice number: the filename (see `invoiceNumberFromFilename`)
+ * - period: the earliest and latest transaction timestamps in the file
+ * - invoice/due date: period end +1 and +2 days. Confirmed against the same
+ *   invoice's PDF, which prints these dates explicitly (999210: period ends
+ *   09-09, invoice date 09-10, due 09-11).
+ *
+ * The emailed PDF states all of these outright, which is why it is the fuller
+ * source and this reconstruction is only needed on the CSV path.
+ */
+function synthesizeMetaRow(sourceFilename: string, records: readonly string[][]): string[] {
+  const { start, end } = scanPeriod(records);
+  return [
+    "Invoice Number:", invoiceNumberFromFilename(sourceFilename),
+    "Period Start:", start,
+    "Period End:", end,
+    "Invoice Date:", addIsoDays(end, 1),
+    "Due Date:", addIsoDays(end, 2),
+    "Supplier:", SUPPLIER_NAME,
+    "Supplier Address:", SUPPLIER_ADDRESS,
+    "Bill To:", BILL_TO_NAME,
+    "Bill To Address:", BILL_TO_ADDRESS,
+  ];
+}
+
+/**
+ * Parses a BVD invoice CSV export — the portal download. It opens straight
+ * into `Fuel Card Transactions` with no header block of any kind, so the
+ * invoice metadata is reconstructed here (`synthesizeMetaRow`) before the
+ * shared core runs.
+ *
+ * This export is a **subset** of the emailed PDF (`parseInvoicePdf`): it
+ * carries no invoice metadata and no tractor/trailer/driver/CDL/trip columns
+ * on express rows. Prefer the PDF when both are available.
  */
 export function parseInvoiceCsv(
   input: Buffer | string,
   productCodes: ReadonlyMap<string, InvoiceProductType>,
+  sourceFilename: string,
 ): ParsedInvoice {
   const records: string[][] = parse(input, {
     relax_column_count: true,
     skip_empty_lines: true,
   });
-  return parseInvoiceRecords(records, productCodes);
+  const metaRow = synthesizeMetaRow(sourceFilename, records);
+  return parseInvoiceRecords([metaRow, ...records], productCodes);
 }

@@ -11,7 +11,7 @@ const REDACTED_PATH = fileURLToPath(
   new URL("../../test/fixtures/invoices/sample-redacted.csv", import.meta.url),
 );
 function redactedLines(): ValidatedInvoiceLine[] {
-  return parseInvoiceCsv(readFileSync(REDACTED_PATH), DEFAULT_INVOICE_PRODUCT_CODES).lines;
+  return parseInvoiceCsv(readFileSync(REDACTED_PATH), DEFAULT_INVOICE_PRODUCT_CODES, "invoice_100001.csv").lines;
 }
 
 // A real invoice, if the operator has dropped one in locally
@@ -21,7 +21,7 @@ const REAL_PATH = fileURLToPath(
 );
 const hasRealFixture = existsSync(REAL_PATH);
 function realLines(): ValidatedInvoiceLine[] {
-  return parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES).lines;
+  return parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES, "999210.csv").lines;
 }
 
 function line(overrides: Partial<ValidatedInvoiceLine>): ValidatedInvoiceLine {

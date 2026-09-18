@@ -25,11 +25,19 @@ export interface ImportInvoiceMeta {
 
 export interface ImportInvoiceOptions {
   productCodes?: ReadonlyMap<string, InvoiceProductType>;
-  /** Defaults to `parseInvoiceCsv`; T-31's CLI injects `parseInvoicePdf` when
-   * the CSV export isn't available (D13). */
+  /**
+   * Defaults to `parseInvoiceCsv`. Callers holding the emailed PDF inject
+   * `parseInvoicePdf`, which is the fuller export — it alone carries the
+   * invoice's own header dates and the express tractor/driver columns.
+   *
+   * `sourceFilename` is passed through because the CSV export contains no
+   * invoice number anywhere in its contents; `parseInvoicePdf` reads one from
+   * the document and ignores the argument.
+   */
   parse?: (
     buffer: Buffer,
     productCodes: ReadonlyMap<string, InvoiceProductType>,
+    sourceFilename: string,
   ) => ParsedInvoice | Promise<ParsedInvoice>;
 }
 
@@ -356,14 +364,13 @@ export async function importInvoice(
   meta: ImportInvoiceMeta,
   options?: ImportInvoiceOptions,
 ): Promise<ImportInvoiceResult> {
-  void meta; // reserved for a future source-filename audit trail; not yet persisted
   const productCodes = options?.productCodes ?? DEFAULT_INVOICE_PRODUCT_CODES;
   const parseFn = options?.parse ?? parseInvoiceCsv;
 
   const fileSha256 = createHash("sha256").update(buffer).digest("hex");
   const existingId = await findExistingBySha256(pool, fileSha256);
 
-  const parsed = await parseFn(buffer, productCodes);
+  const parsed = await parseFn(buffer, productCodes, meta.sourceFilename);
 
   const existingByNumber = await findExistingByInvoiceNumber(pool, parsed.header.invoiceNumber);
   if (existingByNumber && existingByNumber.file_sha256 !== fileSha256) {
