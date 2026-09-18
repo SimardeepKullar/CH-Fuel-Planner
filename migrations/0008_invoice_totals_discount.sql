@@ -1,0 +1,13 @@
+-- T-33 follow-up: A5's "discount captured" KPI needs BVD's own printed
+-- figure, not a recomputation. fuel_stop_lines only stores retail/billed at
+-- 4dp, and gallons * (retail - billed) does not reproduce BVD's printed
+-- per-line "Disc AMT" exactly — measured on the real 999210 fixture at a 4c
+-- drift ($5,088.65 recomputed vs $5,088.61 printed) traceable to rounding
+-- BVD does internally that the 4dp columns don't preserve.
+--
+-- The invoice's own "Grand Totals" section prints a Disc AMT per product
+-- code alongside the gallons/amount invoice_totals already stores verbatim
+-- from that same section (§A11) — trusted as given, same as YOUR PRICE
+-- (CLAUDE.md). Nullable: the "S" (scale) row prints a blank Disc Rate/Disc
+-- Amt, since scale has no per-gallon price to discount off of.
+ALTER TABLE invoice_totals ADD COLUMN discount_usd numeric(12,2);

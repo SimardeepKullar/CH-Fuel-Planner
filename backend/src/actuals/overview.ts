@@ -119,12 +119,12 @@ interface InvoiceTotalRow {
   product_code: string;
   gallons: string;
   amount_usd: string;
+  discount_usd: string | null;
 }
 
 interface DieselAggRow {
   ta_gallons: string | null;
   weighted_num: string | null;
-  discount_total: string | null;
 }
 
 interface ExpressAggRow {
@@ -137,23 +137,17 @@ interface ReceiptAggRow {
   total: string;
 }
 
-/**
- * `avgUsdPerGal` and `discount.totalUsd` are recomputed from the stored
- * gallons-weighted `retail - billed` spread, not copied from BVD's printed
- * per-line "Disc AMT" column — that column isn't stored (fuel_stop_lines has
- * no discount column, A11) and its own per-row rounding doesn't reproduce
- * from the 4dp prices this schema keeps: on the real 999210 fixture BVD
- * prints $5,088.61 but this sum comes to $5,088.65, a four-cent drift over
- * 60 lines from rounding this schema cannot see behind. Measured, not a
- * defect — same category as the two other A5 figures T-31 already found
- * stale (invoice999210.test.ts).
- */
+/** `avgBilledUsdPerGal`'s gallons-weighted numerator/denominator — the
+ * proven formula (invoice999210.test.ts). Discount is read straight off
+ * `invoice_totals.discount_usd` instead (`loadInvoiceTotals` below): BVD's
+ * printed per-line "Disc AMT" doesn't reproduce from gallons ×
+ * (retail − billed) at the 4dp precision this schema stores prices at, so
+ * recomputing it drifted a few cents from the printed figure. */
 async function loadDieselAgg(pool: Pool, invoiceId: string): Promise<DieselAggRow> {
   const { rows } = await pool.query<DieselAggRow>(
     `SELECT
        SUM(fsl.gallons) AS ta_gallons,
-       SUM(fsl.gallons * fsl.billed_usd_per_gal) AS weighted_num,
-       SUM(fsl.gallons * (fsl.retail_usd_per_gal - fsl.billed_usd_per_gal)) AS discount_total
+       SUM(fsl.gallons * fsl.billed_usd_per_gal) AS weighted_num
      FROM fuel_stop_lines fsl
      JOIN fuel_stops fs ON fs.id = fsl.fuel_stop_id
      WHERE fs.invoice_id = $1 AND fsl.product_code = 'TA'`,
@@ -162,9 +156,12 @@ async function loadDieselAgg(pool: Pool, invoiceId: string): Promise<DieselAggRo
   return rows[0]!;
 }
 
+/** `discount_usd` is BVD's own printed "Disc AMT" per product code, from the
+ * invoice's Grand Totals section — trusted as given, same as the gallons
+ * and amount columns this table already stores from that section (A11). */
 async function loadInvoiceTotals(pool: Pool, invoiceId: string): Promise<Map<string, InvoiceTotalRow>> {
   const { rows } = await pool.query<InvoiceTotalRow>(
-    "SELECT product_code, gallons, amount_usd FROM invoice_totals WHERE invoice_id = $1",
+    "SELECT product_code, gallons, amount_usd, discount_usd FROM invoice_totals WHERE invoice_id = $1",
     [invoiceId],
   );
   return new Map(rows.map((r) => [r.product_code, r]));
@@ -218,7 +215,10 @@ async function loadKpis(pool: Pool, period: string, invoice: InvoiceRow | null):
 
   const taGallons = dieselAgg.ta_gallons === null ? 0 : Number(dieselAgg.ta_gallons);
   const avgBilledUsdPerGal = taGallons > 0 ? Number(dieselAgg.weighted_num) / taGallons : null;
-  const discountTotal = dieselAgg.discount_total === null ? 0 : Number(dieselAgg.discount_total);
+  const discountTotal = [...totals.values()].reduce(
+    (sum, row) => sum + (row.discount_usd === null ? 0 : Number(row.discount_usd)),
+    0,
+  );
   const scaleUsd = scale ? Number(scale.amount_usd) : 0;
   const expressUsd = expressAgg.total_usd === null ? 0 : Number(expressAgg.total_usd);
   const expressFeeUsd = expressAgg.fee_usd === null ? 0 : Number(expressAgg.fee_usd);

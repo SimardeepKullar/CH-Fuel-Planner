@@ -232,9 +232,9 @@ async function insertInvoiceTotals(
       continue; // no printed figure for this code — nothing to record
     }
     await client.query(
-      `INSERT INTO invoice_totals (invoice_id, product_code, gallons, amount_usd)
-       VALUES ($1, $2, $3, $4)`,
-      [invoiceId, rawCode, printedRow.gallons ?? "0.00", printedRow.amountUsd],
+      `INSERT INTO invoice_totals (invoice_id, product_code, gallons, amount_usd, discount_usd)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [invoiceId, rawCode, printedRow.gallons ?? "0.00", printedRow.amountUsd, printedRow.discountUsd],
     );
   }
 }

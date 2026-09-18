@@ -194,6 +194,9 @@ export const SCHEMA: readonly TableDescriptor[] = [
       t("product_code"),
       col("gallons", "numeric"),
       col("amount_usd", "numeric"),
+      // BVD's printed per-code "Disc AMT" (T-33 follow-up) — null for "S",
+      // which has no per-gallon price to discount off of.
+      col("discount_usd", "numeric", true),
     ],
   },
   {
