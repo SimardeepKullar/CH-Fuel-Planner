@@ -146,9 +146,12 @@ describe("reconcile — pure", () => {
         lineNumber: 10,
         occurredAt: "2026-01-05T08:00:00",
         expressCode: "9000001",
-        authCodeRef: "X1000001",
+        authCodeRef: "E1000001",
         unitRaw: "101",
+        trailerRaw: null,
         driverNameRaw: "DRIVER",
+        cdlRaw: null,
+        tripNumberRaw: null,
         amountUsd: "50.00",
         feeUsd: "3.00",
         totalUsd: "53.00",
@@ -172,7 +175,7 @@ const hasRealFixture = existsSync(REAL_PATH);
 
 describe.skipIf(!hasRealFixture)("reconcile — real invoice 999210 (local fixture only)", () => {
   it("balances on all product codes, express, and the grand total", () => {
-    const parsed = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES);
+    const parsed = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES, "999210.csv");
     const groups = groupByAuthCode(parsed.lines);
     const result = reconcile(groups, parsed.expressRows, parsed.printedTotals);
     expect(result.amountImbalances).toEqual([]);

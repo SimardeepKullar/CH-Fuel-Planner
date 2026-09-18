@@ -9,6 +9,7 @@ import { runMigrations } from "../../src/db/migrate.js";
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.join(dirname, "../../../migrations");
 const realFixturePath = path.join(dirname, "../../../data/bvd-invoices/999210.csv");
+const realPdfPath = path.join(dirname, "../../../data/bvd-invoices/999210.pdf");
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 const hasRealFixture = existsSync(realFixturePath);
 
@@ -158,6 +159,30 @@ describe.skipIf(!hasDatabase || !hasRealFixture)("invoice 999210 import (integra
     expect((await scopedPool.query("SELECT count(*) FROM receipt_checks")).rows[0]!.count).toBe("0");
   });
 
+  it("imports the emailed PDF of the same invoice, with the tractor and driver the CSV cannot carry", async () => {
+    const exitCode = await runImportInvoiceCli([realPdfPath], scopedPool);
+    expect(exitCode).toBe(0);
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    // Same invoice, same money — the PDF balances to the same printed totals.
+    const { rows: totals } = await scopedPool.query<{ total: string }>(
+      `SELECT (SELECT COALESCE(SUM(amount_usd), 0) FROM fuel_stop_lines) +
+              (SELECT COALESCE(SUM(total_usd), 0) FROM express_charges) AS total`,
+    );
+    expect(totals[0]!.total).toBe("50929.71");
+
+    // Every real express row prints a tractor; only the driver is ever blank.
+    const { rows: express } = await scopedPool.query<{ n: string }>(
+      "SELECT count(*) AS n FROM express_charges WHERE unit_raw IS NOT NULL",
+    );
+    expect(express[0]!.n).toBe("6");
+
+    const { rows: blankDriver } = await scopedPool.query<{ n: string }>(
+      "SELECT count(*) AS n FROM express_charges WHERE driver_name_raw IS NULL",
+    );
+    expect(blankDriver[0]!.n).toBe("1");
+  });
+
   it("anomaly count matches T-30's engine against the real file (measured, not A5's stale figure)", async () => {
     await runImportInvoiceCli([realFixturePath], scopedPool);
 
@@ -174,12 +199,10 @@ describe.skipIf(!hasDatabase || !hasRealFixture)("invoice 999210 import (integra
       (await scopedPool.query("SELECT count(*) FROM fuel_stops WHERE truck_id IS NULL")).rows[0]!.count,
     ).toBe("0");
 
-    // The two real blank-unit express rows (D20) leave truck_id null with
-    // unit_raw also null — that is the named exclusion. A present unit
-    // number always resolves to a truck: unit_raw not null with truck_id
-    // null is the guessed/inconsistent state this invariant forbids, and it
-    // is structurally impossible to reach (an unresolved present unit
-    // quarantines the whole invoice before any row is written).
+    // A present unit number always resolves to a truck: unit_raw not null
+    // with truck_id null is the guessed/inconsistent state this invariant
+    // forbids, and it is structurally impossible to reach (an unresolved
+    // present unit quarantines the whole invoice before any row is written).
     expect(
       (
         await scopedPool.query(
@@ -187,12 +210,17 @@ describe.skipIf(!hasDatabase || !hasRealFixture)("invoice 999210 import (integra
         )
       ).rows[0]!.count,
     ).toBe("0");
+
+    // This import is of the CSV export, which has no tractor column at all,
+    // so every express row legitimately has a null unit_raw and truck_id.
+    // That is a property of the file, not a resolution failure — importing
+    // the PDF of the same invoice resolves all six (see below).
     expect(
       (
         await scopedPool.query(
           "SELECT count(*) FROM express_charges WHERE truck_id IS NULL AND unit_raw IS NULL",
         )
       ).rows[0]!.count,
-    ).toBe("2");
+    ).toBe("6");
   });
 });

@@ -25,22 +25,40 @@ const hasRealFixture = existsSync(REAL_PATH);
 
 describe("parseInvoiceCsv — structural (synthetic fixture)", () => {
   it("parses the header", () => {
-    const result = parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES, "invoice_100001.csv");
     expect(result.header).toEqual({
+      // Derived, because the real export carries no header block: the number
+      // from the filename, the period from the file's own transaction dates,
+      // and invoice/due date from the period end.
       invoiceNumber: "100001",
       periodStart: "2026-01-05",
-      periodEnd: "2026-01-11",
-      invoiceDate: "2026-01-12",
-      dueDate: "2026-01-13",
-      supplierName: "SAMPLE FUEL CO",
-      supplierAddress: "1 Sample Way, Sampleton ON",
-      billToName: "SAMPLE CARRIER INC",
-      billToAddress: "Sampleville ON",
+      periodEnd: "2026-01-07",
+      invoiceDate: "2026-01-08",
+      dueDate: "2026-01-09",
+      supplierName: "BVD Petroleum",
+      supplierAddress: "130 Delta Park Blvd, Brampton, ON L6T 5E7",
+      billToName: "2043733 ONTARIO INC.",
+      billToAddress: "5 MATAGAMI STREET, BRAMPTON, ON, Canada, L6Y 0M9",
     });
   });
 
+  it("refuses a filename with no invoice number in it, rather than inventing one", () => {
+    expect(() => parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES, "export.csv")).toThrow(
+      InvoiceFormatError,
+    );
+  });
+
+  it("reports no express tractor or driver — this export has no such columns", () => {
+    const result = parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES, "invoice_100001.csv");
+    expect(result.expressRows).toHaveLength(2);
+    for (const row of result.expressRows) {
+      expect(row.unitRaw).toBeNull();
+      expect(row.driverNameRaw).toBeNull();
+    }
+  });
+
   it("parses the printed per-code totals, trusted as given", () => {
-    const result = parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES, "invoice_100001.csv");
     const byCode = Object.fromEntries(
       result.printedTotals.products.map((p) => [p.productCode, p]),
     );
@@ -57,13 +75,13 @@ describe("parseInvoiceCsv — structural (synthetic fixture)", () => {
   });
 
   it("parses every product line with no rejections", () => {
-    const result = parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES, "invoice_100001.csv");
     expect(result.rejections).toEqual([]);
     expect(result.lines).toHaveLength(4);
   });
 
   it("parses 4dp prices exactly, as decimal-safe strings", () => {
-    const result = parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES, "invoice_100001.csv");
     const ta = result.lines.find((l) => l.baseAuthCode === "B100001" && l.rawProductCode === "TA")!;
     expect(ta.billedUsdPerGal).toBe("5.1234");
     expect(ta.retailUsdPerGal).toBe("5.5000");
@@ -71,7 +89,7 @@ describe("parseInvoiceCsv — structural (synthetic fixture)", () => {
 
   it("performs no I/O and prints nothing", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
-    parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES);
+    parseInvoiceCsv(redacted(), DEFAULT_INVOICE_PRODUCT_CODES, "invoice_100001.csv");
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
@@ -80,7 +98,7 @@ describe("parseInvoiceCsv — structural (synthetic fixture)", () => {
     const mutated = redacted()
       .toString("utf8")
       .replace("Auth Code, Driver Name, Unit #,", "Auth Code, Driver,");
-    expect(() => parseInvoiceCsv(mutated, DEFAULT_INVOICE_PRODUCT_CODES)).toThrow(
+    expect(() => parseInvoiceCsv(mutated, DEFAULT_INVOICE_PRODUCT_CODES, "invoice_100001.csv")).toThrow(
       InvoiceFormatError,
     );
   });
@@ -88,7 +106,10 @@ describe("parseInvoiceCsv — structural (synthetic fixture)", () => {
 
 describe.skipIf(!hasRealFixture)("parseInvoiceCsv — real invoice 999210 (local fixture only)", () => {
   it("parses the header", () => {
-    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES, "999210.csv");
+    // Every one of these is derived, and every one matches what the same
+    // invoice's PDF prints outright — which is what makes the derivation
+    // rules measured rather than assumed. See parseInvoicePdf.test.ts.
     expect(result.header).toEqual({
       invoiceNumber: "999210",
       periodStart: "2026-09-03",
@@ -96,19 +117,14 @@ describe.skipIf(!hasRealFixture)("parseInvoiceCsv — real invoice 999210 (local
       invoiceDate: "2026-09-10",
       dueDate: "2026-09-11",
       supplierName: "BVD Petroleum",
-      supplierAddress: "130 Delta Park Blvd, Brampton ON",
-      billToName: "2043733 Ontario Inc., DBA CH Logistics",
-      billToAddress: "Burlington ON",
+      supplierAddress: "130 Delta Park Blvd, Brampton, ON L6T 5E7",
+      billToName: "2043733 ONTARIO INC.",
+      billToAddress: "5 MATAGAMI STREET, BRAMPTON, ON, Canada, L6Y 0M9",
     });
   });
 
-  it("records company text verbatim, not corrected", () => {
-    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES);
-    expect(result.header.billToName).toBe("2043733 Ontario Inc., DBA CH Logistics");
-  });
-
   it("parses the printed per-code totals, trusted as given", () => {
-    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES, "999210.csv");
     const byCode = Object.fromEntries(
       result.printedTotals.products.map((p) => [p.productCode, p]),
     );
@@ -130,14 +146,14 @@ describe.skipIf(!hasRealFixture)("parseInvoiceCsv — real invoice 999210 (local
   });
 
   it("parses ~60 real stops (66 distinct base auth codes, 86 product lines), with no rejections", () => {
-    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES, "999210.csv");
     expect(result.rejections).toEqual([]);
     expect(result.lines).toHaveLength(86);
     expect(new Set(result.lines.map((l) => l.baseAuthCode)).size).toBe(66);
   });
 
   it("parses 4dp prices with no rounding, exactly as printed", () => {
-    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES, "999210.csv");
     const worked = result.lines.filter((l) => l.baseAuthCode === "A252014353");
     const ta = worked.find((l) => l.rawProductCode === "TA")!;
     const df = worked.find((l) => l.rawProductCode === "DF")!;
@@ -147,7 +163,7 @@ describe.skipIf(!hasRealFixture)("parseInvoiceCsv — real invoice 999210 (local
   });
 
   it("parses the sub-gallon swipe (0.04) and a large fill (243.95)", () => {
-    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES);
+    const result = parseInvoiceCsv(readFileSync(REAL_PATH), DEFAULT_INVOICE_PRODUCT_CODES, "999210.csv");
     expect(result.lines.some((l) => l.gallons === "0.04")).toBe(true);
     expect(result.lines.some((l) => l.gallons === "243.95")).toBe(true);
   });

@@ -1,4 +1,3 @@
-"Invoice Number: ",700001," ","Period Start: ",2026-09-04," ","Period End: ",2026-09-04," ","Invoice Date: ",2026-09-05," ","Due Date: ",2026-09-12," ","Supplier: ","SAMPLE FUEL CO"," ","Supplier Address: ","1 Sample Way, Sampleton ON"," ","Bill To: ","SAMPLE CARRIER INC"," ","Bill To Address: ","Sampleville ON"
 Fuel Card Transactions
 Transactions for Card # 3000001
 Auth Code, Driver Name, Unit #, Date, Site #, Site Name, Site City, Prov/ST, Prod, QTY, Retail, Billed, Pre Tax AMT, HST, GST, PST, QST, Disc Rate, Disc AMT, Final AMT, CUR
@@ -22,7 +21,7 @@ Auth Code, Driver Name, Unit #, Date, Site #, Site Name, Site City, Prov/ST, Pro
 B3000006A-TA,DRIVER NORMAL,240,2026-09-04 14:00:00,40500,LOVES #500,HOUSTON,TX,TA,41.67,5.3000,5.1000,212.52,0,0,0,0,0,0,212.52,US,
 B3000006A-DF,DRIVER NORMAL,240,2026-09-04 14:00:00,40500,LOVES #500,HOUSTON,TX,DF,1.25,4.6000,4.6000,5.75,0,0,0,0,0,0,5.75,US,
 Express Codes
-DATE,EXPRESS CODE NUMBER, AUTH CODES,TRACTOR,DRIVER, AMOUNT CASHED, FEE, TOTAL, CUR, PAYEE, NOTES
+DATE,EXPRESS CODE NUMBER, AUTH CODES, AMOUNT CASHED, FEE, TOTAL, CUR, PAYEE, NOTES
 Grand Totals
 PRODUCT, QTY, PRE TAX AMT, HST, GST, PST, QST, DISC RATE, DISC AMT, FINAL AMOUNT, CUR
 TA,345.15,0,0,0,0,0,0,0,1760.26,US,

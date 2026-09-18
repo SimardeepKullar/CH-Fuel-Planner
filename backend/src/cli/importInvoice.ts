@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Pool } from "pg";
+import { detectInvoiceFormat } from "../invoice/detectFormat.js";
 import { importInvoice } from "../invoice/importInvoice.js";
+import { parseInvoicePdf } from "../invoice/parseInvoicePdf.js";
 import type { ImportReport } from "../invoice/report.js";
 import { getPool } from "../db/pool.js";
 
@@ -33,7 +35,12 @@ function printReport(report: ImportReport): void {
  * argv and stdout, nothing else — same split as `cli/ingest.ts`. Every
  * decision (parse, group, reconcile, resolve, promote-or-quarantine, run
  * anomalies) lives in `importInvoice()` (T-28/T-29/T-30); this only reads
- * the file, calls it once, and prints the report.
+ * the file, picks the parser for its format, calls it once, and prints the
+ * report.
+ *
+ * Both of BVD's exports are accepted. Prefer the emailed PDF: it prints the
+ * invoice's own header dates and is the only one carrying tractor and driver
+ * on express rows.
  */
 export async function runImportInvoiceCli(argv: string[], pool: Pool): Promise<number> {
   const filePath = argv[0];
@@ -44,9 +51,19 @@ export async function runImportInvoiceCli(argv: string[], pool: Pool): Promise<n
 
   try {
     const buffer = readFileSync(filePath);
-    const result = await importInvoice(pool, buffer, {
-      sourceFilename: path.basename(filePath),
-    });
+    const sourceFilename = path.basename(filePath);
+    const format = detectInvoiceFormat(sourceFilename, buffer);
+    if (format === null) {
+      console.error(`${sourceFilename}: neither a CSV nor a PDF invoice export`);
+      return 1;
+    }
+
+    const result = await importInvoice(
+      pool,
+      buffer,
+      { sourceFilename },
+      format === "pdf" ? { parse: parseInvoicePdf } : undefined,
+    );
 
     switch (result.status) {
       case "imported":

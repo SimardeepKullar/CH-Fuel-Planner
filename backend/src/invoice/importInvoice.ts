@@ -4,7 +4,7 @@ import { runAnomalies } from "../anomaly/runAnomalies.js";
 import { getCardByNumber } from "../catalog/cards.js";
 import { getTruckByUnitNumber } from "../catalog/trucks.js";
 import { resolveExpressDriver, type ExpressDriverResolution } from "../resolve/resolveDriver.js";
-import { resolveStationByName } from "../resolve/resolveStation.js";
+import { resolveStation } from "../resolve/resolveStation.js";
 import { resolveTruckForStop } from "../resolve/resolveTruck.js";
 import { groupByAuthCode, type FuelStopGroup } from "./groupByAuthCode.js";
 import { parseInvoiceCsv, type ParsedInvoice } from "./parseInvoiceCsv.js";
@@ -25,11 +25,19 @@ export interface ImportInvoiceMeta {
 
 export interface ImportInvoiceOptions {
   productCodes?: ReadonlyMap<string, InvoiceProductType>;
-  /** Defaults to `parseInvoiceCsv`; T-31's CLI injects `parseInvoicePdf` when
-   * the CSV export isn't available (D13). */
+  /**
+   * Defaults to `parseInvoiceCsv`. Callers holding the emailed PDF inject
+   * `parseInvoicePdf`, which is the fuller export — it alone carries the
+   * invoice's own header dates and the express tractor/driver columns.
+   *
+   * `sourceFilename` is passed through because the CSV export contains no
+   * invoice number anywhere in its contents; `parseInvoicePdf` reads one from
+   * the document and ignores the argument.
+   */
   parse?: (
     buffer: Buffer,
     productCodes: ReadonlyMap<string, InvoiceProductType>,
+    sourceFilename: string,
   ) => ParsedInvoice | Promise<ParsedInvoice>;
 }
 
@@ -161,7 +169,7 @@ async function resolveFuelStopFields(
       truckAssignmentMisses.push(group.cardNumber);
     }
 
-    const stationId = await resolveStationByName(pool, group.stationNameRaw);
+    const stationId = await resolveStation(pool, group.siteNumber, group.stationNameRaw);
     if (stationId === null) {
       stationMisses.push(group.stationNameRaw);
     }
@@ -290,8 +298,8 @@ async function insertExpressCharge(
     `INSERT INTO express_charges
        (invoice_id, express_code, occurred_at, truck_id, unit_raw,
         driver_id, driver_name_raw, amount_usd, fee_usd, total_usd, payee, note,
-        category, match_status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        category, match_status, trailer_raw, cdl_raw, trip_number_raw)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
     [
       invoiceId,
       row.expressCode,
@@ -307,6 +315,9 @@ async function insertExpressCharge(
       row.note,
       row.category,
       driverResolution.matchStatus,
+      row.trailerRaw,
+      row.cdlRaw,
+      row.tripNumberRaw,
     ],
   );
 }
@@ -356,14 +367,13 @@ export async function importInvoice(
   meta: ImportInvoiceMeta,
   options?: ImportInvoiceOptions,
 ): Promise<ImportInvoiceResult> {
-  void meta; // reserved for a future source-filename audit trail; not yet persisted
   const productCodes = options?.productCodes ?? DEFAULT_INVOICE_PRODUCT_CODES;
   const parseFn = options?.parse ?? parseInvoiceCsv;
 
   const fileSha256 = createHash("sha256").update(buffer).digest("hex");
   const existingId = await findExistingBySha256(pool, fileSha256);
 
-  const parsed = await parseFn(buffer, productCodes);
+  const parsed = await parseFn(buffer, productCodes, meta.sourceFilename);
 
   const existingByNumber = await findExistingByInvoiceNumber(pool, parsed.header.invoiceNumber);
   if (existingByNumber && existingByNumber.file_sha256 !== fileSha256) {

@@ -76,12 +76,12 @@ The frontend today is the v1 three-tab shell (Plan / Recent / Dev Tools) plus a 
 
 **In scope**
 
-- Weekly BVD invoice import (CSV primary, PDF fallback), with reconciliation and a quarantine state.
+- Weekly BVD invoice import (the emailed PDF preferred, the portal CSV also accepted — D13), with reconciliation and a quarantine state.
 - Transactions, transaction detail, receipt queue, other charges.
 - Drivers, trucks, stations analysis keyed on the shared reference layer.
 - Plan vs Actual — live (current invoice) and historical backtest.
 - Card→truck→driver assignments with effective dates; driver name aliases; anomaly thresholds.
-- Ten years of historical invoices backfilled from Gmail, eventually (A19, T-47).
+- Ten years of historical invoices backfilled from Gmail, eventually (A19, T-48).
 
 **Out of scope** — see A17.
 
@@ -165,7 +165,7 @@ Numbered to match the design brief. The design file `CH Fuel App.dc.html` alread
 Landing screen. Answers "how did last week go" in five seconds. KPI cards for the selected period using the A5 figures: total spend, diesel gal/$, **average billed price (headline)**, discount captured (subordinate), DEF, other charges, receipt compliance, anomalies flagged. Below: billed-price-per-gallon trend across recent periods, top-spend-by-driver bars, and a compact anomalies list linking into Transactions.
 
 ### A8.2 Import
-Drag-and-drop for the BVD CSV export; PDF is a fallback path. Three states designed carefully:
+Drag-and-drop for either BVD export. **Prefer the emailed PDF** — it is the only one carrying express tractor/driver and the invoice's own header dates (D13); the portal CSV is accepted too. Three states designed carefully:
 1. **Parsing** — progress, file name, row/page count.
 2. **Reconciliation passed** — preview of what will be written, with the balance check shown explicitly: parsed rows sum to the printed grand total per product code (TA + DF + S + Express = $50,929.71). Confirm writes.
 3. **Reconciliation failed → quarantined** — a **full screen**, not a toast. Which product code failed, expected vs parsed, the offending rows. **Nothing is written.** The user must be able to decide whether to fix the file or report a BVD issue.
@@ -182,7 +182,7 @@ Full record: all product lines, station with map pin, card and its assigned truc
 The only write-heavy screen; optimise hard. Today it is manual: open Samsara, check whether the driver uploaded a receipt photo, type Y/N in a spreadsheet. Design a focused queue: one unconfirmed transaction at a time with enough context to search Samsara, Y/N/skip on keyboard shortcuts, progress (12 of 60), batch confirm for a driver who uploaded everything. **Must survive automation** — if Samsara's API exposes driver documents this becomes a review-exceptions queue, so the layout must not assume every item needs a human decision. **Must work well on a phone.**
 
 ### A8.6 Other Charges
-Express codes: lumper fees, repairs, scale charges. Columns: date, express code, tractor, driver, amount, fee, total, payee, notes, category. Two quirks: some rows have **no driver name at all** (tractor 073, $200.00 + $3.00 = $203.00, note "lumper"), and driver names here are free text with inconsistent casing that will not always match a driver record — **show unmatched as unmatched rather than guessing**. Surface the $3.00 fee total separately.
+Express codes: lumper fees, repairs, scale charges. The emailed PDF prints fourteen columns — date, express code, auth code, tractor, trailer, driver name/id, CDL, trip #, amount cashed, fee, total, currency, payee, notes — of which trailer, CDL and trip are blank on every invoice seen so far. **The portal CSV prints nine of them and omits tractor, trailer, driver, CDL and trip entirely**, so only a PDF import can attribute an express charge to a truck or driver (D13). Two quirks: some rows have **no driver name at all** (tractor 073, $200.00 + $3.00 = $203.00, note "lumper"), and driver names here are free text with inconsistent casing that will not always match a driver record — **show unmatched as unmatched rather than guessing**. Surface the $3.00 fee total separately.
 
 ### A8.7 Drivers
 List: spend, gallons, average billed $/gal, receipt compliance %, anomaly count for the period. Detail: their average billed price against fleet average, transaction history, compliance over time, favoured stations, and **DEF-to-diesel gallon ratio** (an outlier can indicate misuse). Aliases live in Settings, not here.
@@ -347,14 +347,14 @@ Exclusions are named, not hidden: split fills with no single planned stop to mat
 |---|---|---|
 | **D11** | **One repository, one deployment.** The merged app ships from `CH-Fuel-Planner`; no second service. | The shared reference layer is a join, not an integration. Two services would need it in both. |
 | **D12** | **Quarantine is a persisted invoice row with `status='quarantined'` and zero child rows.** | The user must be able to come back to it. A toast loses the imbalance report. |
-| **D13** | **CSV is the primary import path; PDF is a fallback. Supersedes an earlier "Excel" framing** — the BVD portal's invoice download is a CSV transaction export, verified against a real download (invoice 999210), not an .xlsx workbook. | The BVD export is the authoritative shape; PDF parsing is where balance failures come from. |
+| **D13** | **The emailed PDF is the primary import path; the portal CSV is the lesser one. Supersedes both the earlier "Excel" framing and the later "CSV primary, PDF fallback" one.** BVD issues two exports of the same invoice and the PDF is a strict superset: it prints the invoice's own header table (number, invoice date, period start/end, due date) and the Express Codes section's `TRACTOR`, `TRAILER`, `DRIVER NAME/ID`, `CDL` and `TRIP #` columns. The CSV has none of that — it opens straight into `Fuel Card Transactions`, and its express section is nine columns. Both are parsed and both reconcile; a CSV import simply cannot attribute an express charge to a truck or driver, and has its header derived from the filename and its own transaction dates. | Measured against the real 999210 in both formats: identical on every fuel line and every money field, and the CSV's derived header comes out identical to the PDF's printed one. The earlier framing had it backwards, and cost the express tractor/driver data. |
 | **D14** | **Resolution happens at import, stored, not computed per query.** Raw text is kept forever. | An assignment edit must re-resolve deliberately (a job), not silently change history on next read. |
 | **D15** | **Sidebar IA replaces the tab bar.** | Eleven destinations across three groups; tabs stopped scaling at four. Supersedes parts of T-04/T-21/T-23. |
 | **D16** | **Anomaly thresholds are data, not constants.** | Every threshold in A10 is a guess until real history is loaded. |
 | **D17** | **The Receipt Queue is built as an exceptions queue from day one.** | A18 Q3 may automate the check; the layout must not assume every item needs a decision. |
 | **D18** | **`unit_number` is `text`, stored exactly as the fleet writes it. Supersedes D6.** | D6 chose `integer` with a three-digit display pad on the evidence of `022`-style numbers. The real roster (A19) runs `031`…`073` **and** `101`, `1012`…`1023`. A three-digit pad cannot render a four-digit unit, and `integer` loses the leading zero that distinguishes `031` from `31` on the invoice. `formatUnitNumber()` survives as a validator and normaliser, not a padder. |
 | **D19** | **`fuel_cards.driver_id` is a permanent, direct link — not effective-dated.** A separate `truck_assignments(driver_id, truck_id, effective_from, effective_to)` carries the history that actually changes. | Cards are issued one-to-one to a driver and never reassigned; a lost card becomes a new `card_number`, not a repointed `driver_id`. Trucks are what occasionally change (a repair swap), so that's the relationship that needs a date range. Bundling both into one `card_assignments` row (the original A11 design) would have forced a full new row — repeating the unchanged card/driver link — every time dispatch moved a driver to a different truck. |
-| **D20** | **`express_charges.truck_id` and `unit_raw` are nullable. Supersedes the original A11 design, which had `truck_id NOT NULL`.** | The real 999210 invoice has Express Codes rows with no tractor/unit text at all — real data, discovered importing it for T-31, the same real state as A19's blank-driver row one column over. `truck_id NOT NULL` made such a row structurally impossible to insert, forcing the whole invoice to quarantine over a blank field that isn't an error. `truck_id`/`unit_raw` now follow `driver_id`'s existing nullability: a blank unit leaves `truck_id` null and is named in the import report, never guessed and never a rejection. A unit number that *is* present but unrecognised still quarantines (`UNKNOWN_TRUCK_UNIT`) — that is a real data problem, unlike a blank one. |
+| **D20** | **`express_charges.truck_id` and `unit_raw` are nullable. Supersedes the original A11 design, which had `truck_id NOT NULL`, and corrects the reason first given for it.** | The original reason was wrong: 999210 was said to have Express Codes rows with no tractor text, but it does not — that was an artifact of the hand-built fixture leaving blank the two rows A19's table happened to omit. Every real express row carries a tractor. The nullability stands for a better reason: **the CSV export has no tractor column at all**, so every express row imported from a CSV legitimately has a null `truck_id`/`unit_raw`. That is a property of the file, not a resolution failure. What is genuinely blank on a real invoice is the *driver* (one row of six), and `driver_id`/`driver_name_raw` were already nullable for it. A unit number that *is* present but unrecognised still quarantines (`UNKNOWN_TRUCK_UNIT`) — a real data problem, unlike an absent column. |
 
 ---
 
@@ -394,7 +394,7 @@ Flagged, not solved. Each names what it blocks.
 | **Q3** | Does Samsara's API expose driver receipt uploads? If yes the Receipt Queue becomes an exceptions queue. | A8.5 scope (D17 hedges it) |
 | **Q4** | Does a future unified operations dashboard (TransPlus, Samsara, BorderConnect, Motive) absorb this app as a section? | Shell's tolerance for a larger nav (A7) |
 | **Q5** | Is BVD's published price file obtainable as a file, or only as the invoice? Decides whether the A6.5 price audit is real or aspirational. | A10's "billed above published" rule |
-| **Q6** | Ten years of Gmail invoices — are they all the same CSV shape, or do older years differ? | T-47 sizing |
+| **Q6** | Ten years of Gmail invoices — do older years differ in shape? **Partly answered:** 21 invoices across 2026 (`961112`…`999217`) are all the same shape in both exports, and both are now parsed. Whether invoices from earlier years hold that shape is still open, and T-48's backfill is what will find out — it reports a parse rejection per file rather than stopping the run. | T-48 sizing |
 
 ---
 
@@ -428,13 +428,19 @@ Use these real values instead of placeholders.
                                             Stop total     $255.13
 ```
 
-**Sample express codes**
+**Sample express codes** — all six rows of 999210, read off the emailed PDF.
 
-| Date | Code | Tractor | Driver | Amount | Fee | Total | Note |
-|---|---|---|---|---|---|---|---|
-| 2026-09-03 08:29 | 6552061 | 1019 | Gurjit | $240.35 | $3.00 | $243.35 | Lumper |
-| 2026-09-08 07:43 | 6570949 | 064 | Jugraj | $457.60 | $3.00 | $460.60 | Lumper |
-| 2026-09-08 10:12 | 6571780 | 073 | *(blank)* | $200.00 | $3.00 | $203.00 | lumper |
-| 2026-09-08 18:48 | 6574941 | 1017 | rajinder | $62.18 | $3.00 | $65.18 | repair |
+| Date | Code | Auth code | Tractor | Driver | Amount | Fee | Total | Payee |
+|---|---|---|---|---|---|---|---|---|
+| 2026-09-03 06:57 | 6551741 | E246250570 | 066 | Gurshiv | $110.00 | $3.00 | $113.00 | lumper fees |
+| 2026-09-03 08:29 | 6552061 | E246305630 | 1019 | Gurjit | $240.35 | $3.00 | $243.35 | Lumper |
+| 2026-09-08 07:43 | 6570949 | E251277960 | 064 | Jugraj | $457.60 | $3.00 | $460.60 | Lumper |
+| 2026-09-08 10:12 | 6571780 | E251367270 | 073 | *(blank)* | $200.00 | $3.00 | $203.00 | lumper |
+| 2026-09-08 11:19 | 6572226 | E251407700 | 044 | Mohinder | $455.00 | $3.00 | $458.00 | lumper |
+| 2026-09-08 18:48 | 6574941 | E251677300 | 1017 | rajinder | $62.18 | $3.00 | $65.18 | repair |
 
-A blank *tractor* is also real, observed data on 999210 (two rows) — not shown above since it's the driver-name column that has a documented sample, but the same "real state, not a defect" rule applies one column over (D20).
+**Every row carries a tractor; only the *driver* is ever blank** (one row of six). An earlier version of this table listed four of the six, and the fixture built from it left tractor and driver blank on the two it omitted — which is where D20's original "two blank-tractor rows" claim came from. There are none.
+
+`Gurshiv` and `rajinder` are not on the driver roster above: express driver text is free-form and does not always name someone on the fleet, which is why unmatched stays unmatched (A8.6).
+
+The auth code is BVD's own reference for the express authorisation. It is `E`-prefixed and shares no namespace with a fuel stop's `A`-prefixed auth code, so it cannot be joined back to `fuel_stops` to inherit a truck or driver.

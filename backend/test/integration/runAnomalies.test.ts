@@ -67,7 +67,7 @@ describe.skipIf(!hasDatabase)("runAnomalies (integration)", () => {
   });
 
   async function importCases(): Promise<string> {
-    const result = await importInvoice(scopedPool, ANOMALY_CASES_CSV, { sourceFilename: "anomaly-cases.csv" });
+    const result = await importInvoice(scopedPool, ANOMALY_CASES_CSV, { sourceFilename: "invoice_700001.csv" });
     expect(result.status).toBe("imported");
     if (result.status !== "imported") {
       throw new Error("fixture did not promote");
@@ -137,7 +137,7 @@ describe.skipIf(!hasDatabase)("runAnomalies (integration)", () => {
   });
 
   it("a quarantined invoice produces zero anomalies", async () => {
-    const result = await importInvoice(scopedPool, IMBALANCED_CSV, { sourceFilename: "sample-redacted-imbalanced.csv" });
+    const result = await importInvoice(scopedPool, IMBALANCED_CSV, { sourceFilename: "invoice_100002.csv" });
     expect(result.status).toBe("quarantined");
     if (result.status !== "quarantined") {
       throw new Error("fixture did not quarantine");

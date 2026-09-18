@@ -119,6 +119,10 @@ export const SCHEMA: readonly TableDescriptor[] = [
       t("note", true),
       t("category", true),
       t("match_status", false, "'unmatched'::text"),
+      // Printed only on the emailed PDF; the CSV export has no such columns.
+      t("trailer_raw", true),
+      t("cdl_raw", true),
+      t("trip_number_raw", true),
     ],
     checks: [
       "CHECK ((match_status = ANY (ARRAY['matched'::text, 'unmatched'::text])))",

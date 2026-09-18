@@ -30,7 +30,7 @@ describe.skipIf(!hasDatabase)("0003_actuals.sql (integration)", () => {
     await adminPool.end();
   });
 
-  it("applies all eight migrations, and a second run is a no-op", async () => {
+  it("applies all nine migrations, and a second run is a no-op", async () => {
     const first = await runMigrations(scopedPool, migrationsDir);
     expect(first.every((r) => !r.applied)).toBe(true);
     const { rows } = await scopedPool.query<{ filename: string }>(
@@ -45,6 +45,7 @@ describe.skipIf(!hasDatabase)("0003_actuals.sql (integration)", () => {
       "0006_express_charges_truck_nullable.sql",
       "0007_fuel_stops_occurred_at_index.sql",
       "0008_invoice_totals_discount.sql",
+      "0009_express_charges_pdf_columns.sql",
     ]);
   });
 
