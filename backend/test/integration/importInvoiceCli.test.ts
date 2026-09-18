@@ -1,7 +1,9 @@
+import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runImportInvoiceCli } from "../../src/cli/importInvoice.js";
 import { runMigrations } from "../../src/db/migrate.js";
 
@@ -10,8 +12,28 @@ const migrationsDir = path.join(dirname, "../../../migrations");
 const fixturesDir = path.join(dirname, "../fixtures/invoices");
 const hasDatabase = Boolean(process.env.DATABASE_URL);
 
-const BALANCED_PATH = path.join(fixturesDir, "sample-redacted.csv");
-const IMBALANCED_PATH = path.join(fixturesDir, "sample-redacted-imbalanced.csv");
+/**
+ * The CSV export names the invoice nowhere in its contents, so the filename
+ * is the only source of the invoice number. The committed fixtures are named
+ * for what they demonstrate rather than for an invoice, so they are copied to
+ * BVD-style names here — which is also what the CLI will be handed in real
+ * use.
+ */
+let tempDir: string;
+let BALANCED_PATH: string;
+let IMBALANCED_PATH: string;
+
+beforeAll(() => {
+  tempDir = mkdtempSync(path.join(os.tmpdir(), "ch-import-cli-"));
+  BALANCED_PATH = path.join(tempDir, "invoice_100001.csv");
+  IMBALANCED_PATH = path.join(tempDir, "invoice_100002.csv");
+  copyFileSync(path.join(fixturesDir, "sample-redacted.csv"), BALANCED_PATH);
+  copyFileSync(path.join(fixturesDir, "sample-redacted-imbalanced.csv"), IMBALANCED_PATH);
+});
+
+afterAll(() => {
+  rmSync(tempDir, { recursive: true, force: true });
+});
 
 describe.skipIf(!hasDatabase)("runImportInvoiceCli (integration)", () => {
   let adminPool: Pool;

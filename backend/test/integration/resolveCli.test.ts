@@ -148,7 +148,11 @@ describe.skipIf(!hasDatabase)("runResolveCli (integration)", () => {
         { sourceFilename: "c.csv" },
       );
 
-      const before = new Date();
+      // Read the clock the database itself will stamp `resolved_at` with.
+      // Comparing against the host's clock made this flaky by a millisecond
+      // or two, since Postgres runs in a container with its own clock.
+      const { rows: clock } = await scopedPool.query<{ now: Date }>("SELECT now() AS now");
+      const before = clock[0]!.now;
       const exitCode = await runResolveCli(
         [
           "manual",

@@ -254,7 +254,7 @@ function readHeaderRow(lines: readonly string[]): string[] {
 
   const tokens: string[] = [];
   for (const line of lines.slice(headerIndex + 1)) {
-    if (/^Client info/i.test(line) || /^Fuel Card Transactions/.test(line)) break;
+    if (/^Client info/i.test(line) || line.startsWith("Fuel Card Transactions")) break;
     tokens.push(...tokenize(line));
   }
 

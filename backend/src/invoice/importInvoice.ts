@@ -4,7 +4,7 @@ import { runAnomalies } from "../anomaly/runAnomalies.js";
 import { getCardByNumber } from "../catalog/cards.js";
 import { getTruckByUnitNumber } from "../catalog/trucks.js";
 import { resolveExpressDriver, type ExpressDriverResolution } from "../resolve/resolveDriver.js";
-import { resolveStationByName } from "../resolve/resolveStation.js";
+import { resolveStation } from "../resolve/resolveStation.js";
 import { resolveTruckForStop } from "../resolve/resolveTruck.js";
 import { groupByAuthCode, type FuelStopGroup } from "./groupByAuthCode.js";
 import { parseInvoiceCsv, type ParsedInvoice } from "./parseInvoiceCsv.js";
@@ -169,7 +169,7 @@ async function resolveFuelStopFields(
       truckAssignmentMisses.push(group.cardNumber);
     }
 
-    const stationId = await resolveStationByName(pool, group.stationNameRaw);
+    const stationId = await resolveStation(pool, group.siteNumber, group.stationNameRaw);
     if (stationId === null) {
       stationMisses.push(group.stationNameRaw);
     }
@@ -298,8 +298,8 @@ async function insertExpressCharge(
     `INSERT INTO express_charges
        (invoice_id, express_code, occurred_at, truck_id, unit_raw,
         driver_id, driver_name_raw, amount_usd, fee_usd, total_usd, payee, note,
-        category, match_status)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        category, match_status, trailer_raw, cdl_raw, trip_number_raw)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
     [
       invoiceId,
       row.expressCode,
@@ -315,6 +315,9 @@ async function insertExpressCharge(
       row.note,
       row.category,
       driverResolution.matchStatus,
+      row.trailerRaw,
+      row.cdlRaw,
+      row.tripNumberRaw,
     ],
   );
 }

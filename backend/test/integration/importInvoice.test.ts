@@ -26,7 +26,6 @@ const IMBALANCED_CSV = readFileSync(path.join(fixturesDir, "sample-redacted-imba
  * failure path. */
 const DUPLICATE_LINE_CSV = Buffer.from(
   [
-    '"Invoice Number: ",900001," ","Period Start: ",2026-01-05," ","Period End: ",2026-01-11," ","Invoice Date: ",2026-01-12," ","Due Date: ",2026-01-13," ","Supplier: ","SAMPLE FUEL CO"," ","Supplier Address: ","1 Sample Way, Sampleton ON"," ","Bill To: ","SAMPLE CARRIER INC"," ","Bill To Address: ","Sampleville ON"',
     "Fuel Card Transactions",
     "Transactions for Card # 1000001",
     "Auth Code, Driver Name, Unit #, Date, Site #, Site Name, Site City, Prov/ST, Prod, QTY, Retail, Billed, Pre Tax AMT, HST, GST, PST, QST, Disc Rate, Disc AMT, Final AMT, CUR",
@@ -78,7 +77,7 @@ describe.skipIf(!hasDatabase)("importInvoice (integration)", () => {
   });
 
   it("promotes a balanced invoice: fuel_stops, fuel_stop_lines, express_charges, status='imported'", async () => {
-    const result = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "sample-redacted.csv" });
+    const result = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "invoice_100001.csv" });
     expect(result.status).toBe("imported");
 
     const invoices = await scopedPool.query("SELECT status FROM invoices");
@@ -101,7 +100,7 @@ describe.skipIf(!hasDatabase)("importInvoice (integration)", () => {
   });
 
   it("quarantines an imbalanced invoice: zero child rows, a rejection naming DF", async () => {
-    const result = await importInvoice(scopedPool, IMBALANCED_CSV, { sourceFilename: "sample-redacted-imbalanced.csv" });
+    const result = await importInvoice(scopedPool, IMBALANCED_CSV, { sourceFilename: "invoice_100002.csv" });
     expect(result.status).toBe("quarantined");
 
     const invoices = await scopedPool.query("SELECT status FROM invoices");
@@ -119,8 +118,8 @@ describe.skipIf(!hasDatabase)("importInvoice (integration)", () => {
   });
 
   it("returns the existing invoice unchanged on a re-upload of the same bytes, writing nothing", async () => {
-    const first = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "sample-redacted.csv" });
-    const second = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "sample-redacted.csv" });
+    const first = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "invoice_100001.csv" });
+    const second = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "invoice_100001.csv" });
 
     expect(first.status).toBe("imported");
     expect(second.status).toBe("duplicate");
@@ -133,7 +132,7 @@ describe.skipIf(!hasDatabase)("importInvoice (integration)", () => {
   });
 
   it("refuses a different file under the same invoice number, with a reason distinct from duplicate", async () => {
-    const first = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "sample-redacted.csv" });
+    const first = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "invoice_100001.csv" });
     expect(first.status).toBe("imported");
 
     // Same invoice number (100001), different bytes (DF bumped by a cent —
@@ -142,7 +141,7 @@ describe.skipIf(!hasDatabase)("importInvoice (integration)", () => {
       BALANCED_CSV.toString("utf8").replace("DF,5.00,22.50,0,0,0,0,0,0,22.50,US,", "DF,5.00,22.51,0,0,0,0,0,0,22.51,US,"),
       "utf8",
     );
-    const second = await importInvoice(scopedPool, differentFile, { sourceFilename: "sample-redacted-2.csv" });
+    const second = await importInvoice(scopedPool, differentFile, { sourceFilename: "invoice_100001.csv" });
 
     expect(second.status).toBe("conflict");
     if (second.status === "conflict") {
@@ -153,7 +152,7 @@ describe.skipIf(!hasDatabase)("importInvoice (integration)", () => {
 
   it("leaves no partial invoice when a write fails mid-promotion (rolled back)", async () => {
     await expect(
-      importInvoice(scopedPool, DUPLICATE_LINE_CSV, { sourceFilename: "duplicate-line.csv" }),
+      importInvoice(scopedPool, DUPLICATE_LINE_CSV, { sourceFilename: "invoice_900001.csv" }),
     ).rejects.toThrow();
 
     expect((await scopedPool.query("SELECT count(*) FROM invoices")).rows[0].count).toBe("0");
@@ -163,7 +162,7 @@ describe.skipIf(!hasDatabase)("importInvoice (integration)", () => {
   it("performs no I/O and prints nothing", async () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "sample-redacted.csv" });
+    await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "invoice_100001.csv" });
     expect(logSpy).not.toHaveBeenCalled();
     expect(errorSpy).not.toHaveBeenCalled();
     logSpy.mockRestore();
@@ -186,7 +185,7 @@ describe.skipIf(!hasDatabase)("importInvoice (integration)", () => {
       [driverId, truckRows[0]!.id],
     );
 
-    const result = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "sample-redacted.csv" });
+    const result = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "invoice_100001.csv" });
     expect(result.status).toBe("imported");
     if (result.status !== "imported") {
       return;
@@ -206,7 +205,7 @@ describe.skipIf(!hasDatabase)("importInvoice (integration)", () => {
   });
 
   it("resolves express_charges.driver_id and match_status from the driver name, and lands a miss as unmatched (T-29)", async () => {
-    const result = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "sample-redacted.csv" });
+    const result = await importInvoice(scopedPool, BALANCED_CSV, { sourceFilename: "invoice_100001.csv" });
     expect(result.status).toBe("imported");
 
     // Neither "DRIVER ONE" (express row 1) nor the blank name (express row

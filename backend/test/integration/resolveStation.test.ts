@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runMigrations } from "../../src/db/migrate.js";
-import { resolveStationByName } from "../../src/resolve/resolveStation.js";
+import { resolveStation } from "../../src/resolve/resolveStation.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.join(dirname, "../../../migrations");
@@ -21,7 +21,7 @@ async function insertStation(
   );
 }
 
-describe.skipIf(!hasDatabase)("resolveStationByName (integration, T-29)", () => {
+describe.skipIf(!hasDatabase)("resolveStation (integration, T-29)", () => {
   let adminPool: Pool;
   let scopedPool: Pool;
   let schema: string;
@@ -43,28 +43,45 @@ describe.skipIf(!hasDatabase)("resolveStationByName (integration, T-29)", () => 
     await adminPool.end();
   });
 
-  it("resolves 'LOVES #294' to the station whose site_ref is 43673, via store number, never SITE text", async () => {
-    // Real pairing from data/bvd/pcn-usd-9206810-981.csv: SITE 43673, NAME "LOVES #294".
-    await insertStation(scopedPool, { siteRef: "43673", nameRaw: "LOVES #294" });
-    // A decoy at a different site_ref proves the join is on the parsed store
-    // number, not on any relationship to BVD's own site text.
-    await insertStation(scopedPool, { siteRef: "99999", nameRaw: "LOVES #999" });
-
-    const stationId = await resolveStationByName(scopedPool, "LOVES #294");
-    expect(stationId).not.toBeNull();
-
+  async function siteRefOf(stationId: string | null): Promise<string | undefined> {
     const { rows } = await scopedPool.query<{ site_ref: string }>(
       "SELECT site_ref FROM stations WHERE id = $1",
       [stationId],
     );
-    expect(rows[0]?.site_ref).toBe("43673");
+    return rows[0]?.site_ref;
+  }
+
+  it("resolves on the invoice's own Site # against stations.site_ref — the same identifier on both sides", async () => {
+    // Real pairing from data/bvd/pcn-usd-9206810-981.csv: SITE 43673, NAME "LOVES #294".
+    await insertStation(scopedPool, { siteRef: "43673", nameRaw: "LOVES #294" });
+    await insertStation(scopedPool, { siteRef: "99999", nameRaw: "LOVES #999" });
+
+    expect(await siteRefOf(await resolveStation(scopedPool, "43673", "LOVES #294"))).toBe("43673");
   });
 
-  it("leaves station_id null for a store number no station carries — no guess", async () => {
+  it("still resolves by store number when the site identifier is unknown", async () => {
+    await insertStation(scopedPool, { siteRef: "43673", nameRaw: "LOVES #294" });
+    await insertStation(scopedPool, { siteRef: "99999", nameRaw: "LOVES #999" });
+
+    // No station carries site_ref 11111, so the store number parsed out of the
+    // name is what resolves it — the behaviour this function had before.
+    expect(await siteRefOf(await resolveStation(scopedPool, "11111", "LOVES #294"))).toBe("43673");
+    expect(await siteRefOf(await resolveStation(scopedPool, "", "LOVES #294"))).toBe("43673");
+  });
+
+  it("never treats the site identifier as a store number", async () => {
+    // 43673 is the site identifier of store #294; a station whose store number
+    // literally is 43673 must not be matched by name for that site.
+    await insertStation(scopedPool, { siteRef: "43673", nameRaw: "LOVES #294" });
+    await insertStation(scopedPool, { siteRef: "55555", nameRaw: "LOVES #43673" });
+
+    expect(await siteRefOf(await resolveStation(scopedPool, "43673", "LOVES #294"))).toBe("43673");
+  });
+
+  it("leaves station_id null when neither the site identifier nor the store number is known — no guess", async () => {
     await insertStation(scopedPool, { siteRef: "43673", nameRaw: "LOVES #294" });
 
-    const stationId = await resolveStationByName(scopedPool, "LOVES #999999");
-    expect(stationId).toBeNull();
+    expect(await resolveStation(scopedPool, "11111", "LOVES #999999")).toBeNull();
   });
 
   it("imports T-08's parseStoreName rather than reimplementing store-number parsing", () => {

@@ -65,7 +65,7 @@ describe.skipIf(!hasDatabase)("invoices routes (integration)", () => {
   });
 
   it("a balanced upload returns 200 imported with a report, and the invoice is written", async () => {
-    const response = await app.handle(uploadRequest(BALANCED_CSV, "sample-redacted.csv"));
+    const response = await app.handle(uploadRequest(BALANCED_CSV, "invoice_100001.csv"));
     expect(response.status).toBe(200);
 
     const body = (await response.json()) as { status: string; invoiceId: string; report: { reconcile: { balanced: boolean } } };
@@ -77,7 +77,7 @@ describe.skipIf(!hasDatabase)("invoices routes (integration)", () => {
   });
 
   it("an imbalanced upload returns 200 quarantined with the full report — never a 4xx (D12)", async () => {
-    const response = await app.handle(uploadRequest(IMBALANCED_CSV, "sample-redacted-imbalanced.csv"));
+    const response = await app.handle(uploadRequest(IMBALANCED_CSV, "invoice_100002.csv"));
     expect(response.status).toBe(200);
 
     const body = (await response.json()) as { status: string; invoiceId: string; report: { rejections: unknown[] } };
@@ -90,10 +90,10 @@ describe.skipIf(!hasDatabase)("invoices routes (integration)", () => {
   });
 
   it("a re-upload of the same bytes is a 200 duplicate no-op, not an error", async () => {
-    const first = await app.handle(uploadRequest(BALANCED_CSV, "sample-redacted.csv"));
+    const first = await app.handle(uploadRequest(BALANCED_CSV, "invoice_100001.csv"));
     const firstBody = (await first.json()) as { invoiceId: string };
 
-    const second = await app.handle(uploadRequest(BALANCED_CSV, "sample-redacted.csv"));
+    const second = await app.handle(uploadRequest(BALANCED_CSV, "invoice_100001.csv"));
     expect(second.status).toBe(200);
     const secondBody = (await second.json()) as { status: string; invoiceId: string };
     expect(secondBody.status).toBe("duplicate");
@@ -101,7 +101,7 @@ describe.skipIf(!hasDatabase)("invoices routes (integration)", () => {
   });
 
   it("a different file under an already-used invoice number is a 409 problem+json, distinct from quarantine", async () => {
-    await app.handle(uploadRequest(BALANCED_CSV, "sample-redacted.csv"));
+    await app.handle(uploadRequest(BALANCED_CSV, "invoice_100001.csv"));
 
     // Same invoice number (100001) as BALANCED_CSV, one field's bytes changed.
     const conflictingFile = Buffer.from(
@@ -111,7 +111,7 @@ describe.skipIf(!hasDatabase)("invoices routes (integration)", () => {
       ),
       "utf8",
     );
-    const response = await app.handle(uploadRequest(conflictingFile, "sample-redacted-2.csv"));
+    const response = await app.handle(uploadRequest(conflictingFile, "invoice_100001.csv"));
 
     expect(response.status).toBe(409);
     expect(response.headers.get("content-type")).toBe("application/problem+json");
@@ -124,10 +124,10 @@ describe.skipIf(!hasDatabase)("invoices routes (integration)", () => {
   });
 
   it("GET /invoices paginates newest-first with number, period, total, status, imported-at", async () => {
-    const balanced = await app.handle(uploadRequest(BALANCED_CSV, "sample-redacted.csv"));
+    const balanced = await app.handle(uploadRequest(BALANCED_CSV, "invoice_100001.csv"));
     const balancedBody = (await balanced.json()) as { invoiceId: string };
     await new Promise((resolve) => setTimeout(resolve, 10)); // force a distinct imported_at ordering
-    const imbalanced = await app.handle(uploadRequest(IMBALANCED_CSV, "sample-redacted-imbalanced.csv"));
+    const imbalanced = await app.handle(uploadRequest(IMBALANCED_CSV, "invoice_100002.csv"));
     const imbalancedBody = (await imbalanced.json()) as { invoiceId: string };
 
     const response = await app.handle(new Request("http://localhost/api/v1/invoices?page=1&pageSize=10"));
@@ -152,14 +152,14 @@ describe.skipIf(!hasDatabase)("invoices routes (integration)", () => {
     const imbalancedRow = body.rows[0]!;
     expect(imbalancedRow.invoiceNumber).toBe("100002");
     expect(imbalancedRow.periodStart).toBe("2026-01-05");
-    expect(imbalancedRow.periodEnd).toBe("2026-01-11");
+    expect(imbalancedRow.periodEnd).toBe("2026-01-07");
     expect(imbalancedRow.status).toBe("quarantined");
     expect(typeof imbalancedRow.grandTotalUsd).toBe("number");
     expect(typeof imbalancedRow.importedAt).toBe("string");
   });
 
   it("a quarantined invoice's report is retrievable by id without re-uploading the file", async () => {
-    const uploaded = await app.handle(uploadRequest(IMBALANCED_CSV, "sample-redacted-imbalanced.csv"));
+    const uploaded = await app.handle(uploadRequest(IMBALANCED_CSV, "invoice_100002.csv"));
     const { invoiceId } = (await uploaded.json()) as { invoiceId: string };
 
     const response = await app.handle(new Request(`http://localhost/api/v1/invoices/${invoiceId}`));
@@ -184,18 +184,16 @@ describe.skipIf(!hasDatabase)("invoices routes (integration)", () => {
 
 /**
  * The route is the first caller that ever picks `parseInvoicePdf` over the
- * CSV default (D13) — everywhere else it's exercised directly
- * (parseInvoicePdf.test.ts, header/line/express-row shape only) or never
- * reached (cli/importInvoice.ts always defaults to CSV). Proven here against
- * the real 999210 PDF: `pdf-parse`'s text extraction only recovers a handful
- * of this multi-page invoice's lines, so the honest, correct outcome is
- * `quarantined` with a real amount imbalance on TA and DF — exactly the
- * failure mode D13's own reasoning names ("PDF text extraction is inherently
- * less reliable... which is why T-28's reconciliation exists before
- * anything reaches the database"). This is that guard catching a real
- * fallback-path shortfall, not a bug in the dispatch being tested.
+ * CSV default — everywhere else it is exercised directly
+ * (parseInvoicePdf.test.ts) or never reached (cli/importInvoice.ts defaults
+ * to CSV).
+ *
+ * The PDF is the fuller of BVD's two exports: it prints the invoice's own
+ * header dates, and it is the only one carrying tractor and driver on
+ * express rows. Uploading it imports cleanly and balances against the
+ * invoice's own printed totals.
  */
-describe.skipIf(!hasDatabase || !hasRealFixtures)("POST /invoices/import — PDF fallback (integration, local fixture only)", () => {
+describe.skipIf(!hasDatabase || !hasRealFixtures)("POST /invoices/import — the emailed PDF (integration, local fixture only)", () => {
   let adminPool: Pool;
   let scopedPool: Pool;
   let schema: string;
@@ -219,23 +217,35 @@ describe.skipIf(!hasDatabase || !hasRealFixtures)("POST /invoices/import — PDF
     await adminPool.end();
   });
 
-  it("detects the PDF by magic bytes, parses it, and quarantines on the real amount imbalance", async () => {
-    const pdfResponse = await app.handle(uploadRequest(readFileSync(realPdfPath), "999210.pdf"));
-    expect(pdfResponse.status).toBe(200);
-    const pdfBody = (await pdfResponse.json()) as {
+  it("detects the PDF by magic bytes, parses it, and imports it balanced", async () => {
+    const response = await app.handle(uploadRequest(readFileSync(realPdfPath), "999210.pdf"));
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
       status: string;
-      report: { invoiceNumber: string; reconcile: { balanced: boolean; amountImbalances: Array<{ productCode: string }> } };
+      report: { invoiceNumber: string; reconcile: { balanced: boolean } };
     };
-    // A parser rejection or a resolution miss would also quarantine — the
-    // amount imbalance is what actually happens for this file, so it's what
-    // proves the PDF (not the CSV) was the one parsed.
-    expect(pdfBody.status).toBe("quarantined");
-    expect(pdfBody.report.invoiceNumber).toBe("999210");
-    expect(pdfBody.report.reconcile.balanced).toBe(false);
-    expect(pdfBody.report.reconcile.amountImbalances.map((a) => a.productCode).sort()).toEqual(["DF", "TA"]);
+    expect(body.status).toBe("imported");
+    expect(body.report.invoiceNumber).toBe("999210");
+    expect(body.report.reconcile.balanced).toBe(true);
+  });
 
-    // The quarantined row still claims invoice_number 999210, so the CSV
-    // upload right after it is the 409 CONFLICT case, not a fresh import.
+  it("persists the express tractor and driver that only this export carries", async () => {
+    await app.handle(uploadRequest(readFileSync(realPdfPath), "999210.pdf"));
+
+    const { rows } = await scopedPool.query<{ n: string }>(
+      "SELECT count(*) AS n FROM express_charges WHERE unit_raw IS NOT NULL",
+    );
+    expect(rows[0]!.n).toBe("6");
+
+    const { rows: named } = await scopedPool.query<{ driver_name_raw: string | null }>(
+      "SELECT driver_name_raw FROM express_charges WHERE express_code = '6551741'",
+    );
+    expect(named[0]?.driver_name_raw).toBe("Gurshiv");
+  });
+
+  it("treats the CSV of the same invoice as a conflict — same number, different bytes", async () => {
+    await app.handle(uploadRequest(readFileSync(realPdfPath), "999210.pdf"));
+
     const csvResponse = await app.handle(uploadRequest(readFileSync(realCsvPath), "999210.csv"));
     expect(csvResponse.status).toBe(409);
     expect(csvResponse.headers.get("content-type")).toBe("application/problem+json");

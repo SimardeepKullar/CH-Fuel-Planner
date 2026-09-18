@@ -1,31 +1,9 @@
 import type { Pool } from "pg";
 import { z } from "zod";
+import { detectInvoiceFormat } from "../../invoice/detectFormat.js";
 import { importInvoice, type ImportInvoiceMeta, type ImportInvoiceResult } from "../../invoice/importInvoice.js";
 import { parseInvoicePdf } from "../../invoice/parseInvoicePdf.js";
 import { problemResponse } from "../problem.js";
-
-const PDF_MAGIC = Buffer.from("%PDF-", "ascii");
-
-/**
- * CSV-vs-PDF dispatch (D13): `importInvoice`'s default parser is CSV, so the
- * CSV path calls it with no `options.parse` at all — only the PDF path needs
- * to inject one. Magic bytes decide first (an upload's extension can lie);
- * the extension is a fallback for a PDF whose bytes didn't come through
- * intact. Anything else is a 415 — there is no third format.
- */
-function detectInvoiceFormat(filename: string, buffer: Buffer): "csv" | "pdf" | null {
-  if (buffer.subarray(0, PDF_MAGIC.length).equals(PDF_MAGIC)) {
-    return "pdf";
-  }
-  const lower = filename.toLowerCase();
-  if (lower.endsWith(".csv")) {
-    return "csv";
-  }
-  if (lower.endsWith(".pdf")) {
-    return "pdf";
-  }
-  return null;
-}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
