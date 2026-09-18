@@ -1,5 +1,6 @@
 import type { Pool } from "pg";
 import { getPool } from "../db/pool.js";
+import { handleGetInvoice, handleImportInvoice, handleListInvoices } from "./routes/invoices.js";
 import { handleGetOverview } from "./routes/overview.js";
 import { handleGetTransaction, handleListTransactions } from "./routes/transactions.js";
 import { problemResponse } from "./problem.js";
@@ -11,9 +12,9 @@ import { problemResponse } from "./problem.js";
  *
  * This is still a stub for most of the surface: T-16 replaces the
  * hard-coded branches below with a real route table (`GET /plans/{id}`,
- * `POST /plans`, ...). T-32 and T-33 add `/transactions` and `/overview`
- * directly to this stub rather than waiting on that table — TICKETS-v2.md's
- * critical path does not route either through T-16.
+ * `POST /plans`, ...). T-32, T-33, and T-34 add `/transactions`, `/overview`,
+ * and `/invoices` directly to this stub rather than waiting on that table —
+ * TICKETS-v2.md's critical path does not route any of them through T-16.
  */
 export interface CreateAppOptions {
   /**
@@ -67,6 +68,19 @@ export function createApp(options: CreateAppOptions = {}): App {
 
       if (path === "/overview" && request.method === "GET") {
         return handleGetOverview(options.pool ?? getPool(), url);
+      }
+
+      if (path === "/invoices/import" && request.method === "POST") {
+        return handleImportInvoice(options.pool ?? getPool(), request, url);
+      }
+
+      if (path === "/invoices" && request.method === "GET") {
+        return handleListInvoices(options.pool ?? getPool(), url);
+      }
+
+      const invoiceDetailMatch = /^\/invoices\/([^/]+)$/.exec(path);
+      if (invoiceDetailMatch && request.method === "GET") {
+        return handleGetInvoice(options.pool ?? getPool(), invoiceDetailMatch[1]!, url);
       }
 
       return problemResponse({
