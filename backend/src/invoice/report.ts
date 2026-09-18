@@ -21,6 +21,10 @@ export interface NormalizedRejection {
 export interface ImportReport {
   invoiceNumber: string;
   fileSha256: string;
+  /** ISO date, straight off the invoice's own header (`InvoiceHeader`) — the
+   * gap report's covered set unions these, never the imported_at clock. */
+  periodStart: string;
+  periodEnd: string;
   grandTotalUsd: string;
   reconcile: ReconcileResult;
   parserRejectionCount: number;
@@ -50,6 +54,8 @@ export interface ImportReport {
 export interface BuildImportReportInput {
   invoiceNumber: string;
   fileSha256: string;
+  periodStart: string;
+  periodEnd: string;
   grandTotalUsd: string;
   parserRejections: ReadonlyArray<{
     lineNumber: number;
@@ -126,6 +132,8 @@ export function buildImportReport(input: BuildImportReportInput): ImportReport {
   return {
     invoiceNumber: input.invoiceNumber,
     fileSha256: input.fileSha256,
+    periodStart: input.periodStart,
+    periodEnd: input.periodEnd,
     grandTotalUsd: input.grandTotalUsd,
     reconcile: reconcileResult,
     parserRejectionCount: input.parserRejections.length,

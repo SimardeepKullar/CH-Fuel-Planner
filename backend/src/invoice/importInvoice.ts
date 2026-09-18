@@ -403,6 +403,8 @@ export async function importInvoice(
   const report = buildImportReport({
     invoiceNumber: parsed.header.invoiceNumber,
     fileSha256,
+    periodStart: parsed.header.periodStart,
+    periodEnd: parsed.header.periodEnd,
     grandTotalUsd: parsed.printedTotals.grandTotalUsd,
     parserRejections: parsed.rejections,
     reconcileResult,
