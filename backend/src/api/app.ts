@@ -2,6 +2,7 @@ import type { Pool } from "pg";
 import { getPool } from "../db/pool.js";
 import { handleGetInvoice, handleImportInvoice, handleListInvoices } from "./routes/invoices.js";
 import { handleGetOverview } from "./routes/overview.js";
+import { handleGetReceiptQueue, handlePostReceiptChecks } from "./routes/receipts.js";
 import { handleGetTransaction, handleListTransactions } from "./routes/transactions.js";
 import { problemResponse } from "./problem.js";
 
@@ -36,9 +37,42 @@ export interface CreateAppOptions {
   pool?: Pool;
 }
 
+/**
+ * Per-request identity. A bare `Request` carries no session of its own
+ * (§13's framework-free boundary), so a route that needs to attribute a
+ * write to a person — `receipt_checks.checked_by` is the first one — has
+ * nowhere else to read it from. `frontend/src/app/api/v1/[[...path]]/
+ * route.ts` calls `auth()` server-side and passes the result through here;
+ * a bare `handle(request)` (every existing unit/integration test) simply
+ * carries no identity.
+ */
+export interface HandleContext {
+  userId?: string;
+}
+
 export interface App {
   readonly authRequired: boolean;
-  handle(request: Request): Promise<Response>;
+  handle(request: Request, context?: HandleContext): Promise<Response>;
+}
+
+/**
+ * `/receipt-queue` and `/receipt-checks` need `context.userId` unconditionally,
+ * not gated by `authRequired`: unlike every other route so far, the id isn't
+ * just a boundary check, it's data the write persists
+ * (`receipt_checks.checked_by`) — there is no meaningful way to serve either
+ * route without it, whether or not the caller opted out of the auth
+ * boundary for everything else.
+ */
+function requireUser(context: HandleContext | undefined, url: URL): Response | null {
+  if (context?.userId) {
+    return null;
+  }
+  return problemResponse({
+    title: "Unauthorized",
+    status: 401,
+    detail: `Authentication required for ${url.pathname}`,
+    instance: url.pathname,
+  });
 }
 
 export function createApp(options: CreateAppOptions = {}): App {
@@ -46,7 +80,7 @@ export function createApp(options: CreateAppOptions = {}): App {
 
   return {
     authRequired,
-    async handle(request: Request): Promise<Response> {
+    async handle(request: Request, context?: HandleContext): Promise<Response> {
       const url = new URL(request.url);
       const path = url.pathname.replace(/^\/api\/v1/, "") || "/";
 
@@ -81,6 +115,22 @@ export function createApp(options: CreateAppOptions = {}): App {
       const invoiceDetailMatch = /^\/invoices\/([^/]+)$/.exec(path);
       if (invoiceDetailMatch && request.method === "GET") {
         return handleGetInvoice(options.pool ?? getPool(), invoiceDetailMatch[1]!, url);
+      }
+
+      if (path === "/receipt-queue" && request.method === "GET") {
+        const unauthorized = requireUser(context, url);
+        if (unauthorized) {
+          return unauthorized;
+        }
+        return handleGetReceiptQueue(options.pool ?? getPool(), url);
+      }
+
+      if (path === "/receipt-checks" && request.method === "POST") {
+        const unauthorized = requireUser(context, url);
+        if (unauthorized) {
+          return unauthorized;
+        }
+        return handlePostReceiptChecks(options.pool ?? getPool(), request, url, context!.userId!);
       }
 
       return problemResponse({

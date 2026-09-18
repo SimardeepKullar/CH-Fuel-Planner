@@ -127,7 +127,16 @@ const BASE_SELECT = `
   ) ta ON true
 `;
 
-function driverRawResolved(row: TransactionRow): RawResolvedString {
+/**
+ * `Pick`ed rather than typed to `TransactionRow` so `receipts.ts`'s queue
+ * query — a different SELECT with the same column names but not every
+ * `TransactionRow` field — can reuse these three builders instead of a
+ * second copy of the same raw/resolved logic (A8.5 is the same shape as
+ * A8.3 minus fields, not a different one).
+ */
+export function driverRawResolved(
+  row: Pick<TransactionRow, "driver_display_name" | "driver_name_raw">,
+): RawResolvedString {
   const resolved = row.driver_display_name;
   return {
     resolved,
@@ -136,7 +145,7 @@ function driverRawResolved(row: TransactionRow): RawResolvedString {
   };
 }
 
-function truckRawResolved(row: TransactionRow): RawResolvedString {
+export function truckRawResolved(row: Pick<TransactionRow, "truck_unit_number" | "unit_raw">): RawResolvedString {
   const resolved = row.truck_unit_number;
   return {
     resolved,
@@ -145,7 +154,9 @@ function truckRawResolved(row: TransactionRow): RawResolvedString {
   };
 }
 
-function stationSummary(row: TransactionRow): TransactionStationSummary | null {
+export function stationSummary(
+  row: Pick<TransactionRow, "station_id" | "station_name_raw" | "station_city_raw" | "station_state_usps">,
+): TransactionStationSummary | null {
   if (row.station_id === null || row.station_name_raw === null) {
     return null;
   }
