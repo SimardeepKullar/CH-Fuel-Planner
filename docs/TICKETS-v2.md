@@ -71,7 +71,7 @@ If the spec and the repository disagree, say so and propose the edit.
 | **T-34** | **Invoice import endpoints and history** | T-31 | **8** | **done — merged (`4b8e899`, PR #24)** |
 | **T-35** | **Receipt queue endpoints** | T-31 | **8** | **done — merged (`bed13eb`, PR #27)** |
 | **T-36** | **Other-charges endpoints** | T-31 | **8** | **done — merged (`d925cd1`, PR #28)** |
-| **T-37** | **Analysis endpoints — drivers, trucks, stations** | T-31 | **8** | **new** |
+| **T-37** | **Analysis endpoints — drivers, trucks, stations** | T-31 | **8** | **done — PR #29** |
 | **T-38** | **Plan vs Actual matching and endpoints** | T-19, T-31 | **8** | **new** |
 | **T-39** | **App shell — sidebar IA and invoice-period selector** | T-21 | **9** | **new** |
 | **T-40** | **Transactions screen** | T-32, T-39 | **9** | **new** |
