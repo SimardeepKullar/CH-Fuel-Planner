@@ -8,6 +8,7 @@ import { createApp } from "../../src/api/app.js";
 import { getOverview } from "../../src/actuals/overview.js";
 import { runImportInvoiceCli } from "../../src/cli/importInvoice.js";
 import { runMigrations } from "../../src/db/migrate.js";
+import { insertCard, insertDriver, insertInvoice, insertStop } from "./support/actualsFixtures.js";
 
 const dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsDir = path.join(dirname, "../../../migrations");
@@ -311,6 +312,30 @@ describe.skipIf(!hasDatabase)("GET /overview synthetic periods (integration)", (
     expect(bigSpender.gallons).toBe(150);
     expect(bigSpender.avgBilledUsdPerGal).toBeCloseTo(5.3333, 3);
     expect(bigSpender.avgBilledUsdPerGal).not.toBeCloseTo(5.5, 3);
+  });
+
+  it("top spend counts a stop's total once, however many product lines it carries", async () => {
+    const invoice = await insertInvoice(scopedPool, { number: "T37-LINES", periodStart: "2026-03-16", periodEnd: "2026-03-22" });
+    const driver = await insertDriver(scopedPool, "Two Lines");
+    const card = await insertCard(scopedPool, { cardNumber: "TWO-LINES", driverId: driver });
+    await insertStop(scopedPool, {
+      invoiceId: invoice,
+      cardId: card,
+      driverId: driver,
+      occurredAt: "2026-03-17T15:00:00Z",
+      lines: [
+        { code: "TA", gallons: 100, billed: 5 },
+        { code: "DF", gallons: 3, billed: 4 },
+      ],
+    });
+
+    const result = await getOverview(scopedPool, "2026-03-16");
+
+    // 100 × 5.00 + 3 × 4.00 = 512.00 — the stop's printed total, not 1,024.00.
+    expect(result.topSpendByDriver).toHaveLength(1);
+    expect(result.topSpendByDriver[0]!.totalUsd).toBe(512);
+    expect(result.topSpendByDriver[0]!.gallons).toBe(100);
+    expect(result.topSpendByDriver[0]!.avgBilledUsdPerGal).toBe(5);
   });
 
   it("the anomaly digest carries the fuel stop id, enough to deep-link into Transactions", async () => {
