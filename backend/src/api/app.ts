@@ -5,6 +5,7 @@ import { handleListExpressCharges } from "./routes/expressCharges.js";
 import { handleGetInvoice, handleImportInvoice, handleListInvoices } from "./routes/invoices.js";
 import { handleGetOverview } from "./routes/overview.js";
 import { handleGetReceiptQueue, handlePostReceiptChecks } from "./routes/receipts.js";
+import { handleGetStationBilledPrices } from "./routes/stations.js";
 import { handleGetTransaction, handleListTransactions } from "./routes/transactions.js";
 import { handleGetTruck, handleListTrucks } from "./routes/trucks.js";
 import { problemResponse } from "./problem.js";
@@ -127,6 +128,11 @@ export function createApp(options: CreateAppOptions = {}): App {
       const truckDetailMatch = /^\/trucks\/([^/]+)$/.exec(path);
       if (truckDetailMatch && request.method === "GET") {
         return handleGetTruck(options.pool ?? getPool(), truckDetailMatch[1]!, url);
+      }
+
+      const stationBilledPricesMatch = /^\/stations\/([^/]+)\/billed-prices$/.exec(path);
+      if (stationBilledPricesMatch && request.method === "GET") {
+        return handleGetStationBilledPrices(options.pool ?? getPool(), stationBilledPricesMatch[1]!, url);
       }
 
       if (path === "/invoices/import" && request.method === "POST") {

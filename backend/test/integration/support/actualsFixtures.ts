@@ -158,3 +158,25 @@ export async function insertAnomaly(
     [anomaly.fuelStopId, anomaly.rule, anomaly.severity, anomaly.dismissed ? new Date() : null],
   );
 }
+
+let priceImport = 0;
+
+/** A published-price row as v1's price ingest leaves it: a `price_imports` row
+ * and one `station_prices` row (product_type `highway_diesel`, what an
+ * invoice's TA code maps to) valid on exactly `validOn`. */
+export async function insertPublishedPrice(
+  pool: Pool,
+  price: { stationId: string; validOn: string; yourPrice: number },
+): Promise<void> {
+  priceImport += 1;
+  const { rows } = await pool.query<{ id: string }>(
+    `INSERT INTO price_imports (supplier, source_filename, file_sha256, effective_date, status)
+     VALUES ('BVD', $1, $2, $3::date, 'completed') RETURNING id`,
+    [`fixture-${priceImport}.csv`, createHash("sha256").update(`price-import-${priceImport}-${Date.now()}`).digest("hex"), price.validOn],
+  );
+  await pool.query(
+    `INSERT INTO station_prices (station_id, import_id, raw_product, product_type, your_price, valid_on)
+     VALUES ($1, $2, 'ULSD', 'highway_diesel', $3, $4::date)`,
+    [price.stationId, rows[0]!.id, price.yourPrice, price.validOn],
+  );
+}

@@ -71,6 +71,20 @@ async function loadThresholds(db: Db): Promise<Map<RuleName, unknown>> {
   return byRule as Map<RuleName, unknown>;
 }
 
+/** Just the `price_above_published` row — for callers that audit prices
+ * without running every rule (`GET /stations/{id}/billed-prices`). Same table,
+ * same missing-row failure as `loadThresholds`: thresholds are data (D16). */
+export async function loadPriceAbovePublishedConfig(db: Db): Promise<PriceAbovePublishedConfig> {
+  const { rows } = await db.query<{ config: PriceAbovePublishedConfig }>(
+    "SELECT config FROM anomaly_thresholds WHERE rule = $1",
+    ["price_above_published"],
+  );
+  if (!rows[0]) {
+    throw new Error("no anomaly_thresholds row for rule 'price_above_published' (migrations/0005_anomaly_thresholds_seed.sql)");
+  }
+  return rows[0].config;
+}
+
 async function loadStops(db: Db, invoiceId: string): Promise<StopRow[]> {
   const { rows } = await db.query<StopRow>(
     `SELECT fs.id, fs.occurred_at, fs.card_id, fs.station_id, fs.unit_raw,
@@ -107,7 +121,7 @@ async function loadLines(db: Db, invoiceId: string): Promise<Map<string, LineRow
 /** `station_prices` (v1 §12) is the published price file this rule audits
  * against — reused, never reinvented. Only rows for stations this invoice
  * actually visited are fetched. */
-async function loadPublishedPrices(
+export async function loadPublishedPrices(
   db: Db,
   stationIds: readonly string[],
   fuelProductCode: string,

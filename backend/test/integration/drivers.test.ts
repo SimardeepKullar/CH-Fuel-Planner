@@ -1,8 +1,13 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { Pool } from "pg";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp, type App } from "../../src/api/app.js";
 import type { DriverDetail, DriversResult } from "../../src/actuals/drivers.js";
 import type { OverviewResult } from "../../src/actuals/overview.js";
+import type { TrucksResult } from "../../src/actuals/trucks.js";
+import { runImportInvoiceCli } from "../../src/cli/importInvoice.js";
 import {
   insertAnomaly,
   insertCard,
@@ -14,7 +19,10 @@ import {
   teardown,
 } from "./support/actualsFixtures.js";
 
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+const realCsvPath = path.join(dirname, "../../../data/bvd-invoices/999210.csv");
 const hasDatabase = Boolean(process.env.DATABASE_URL);
+const hasRealFixture = existsSync(realCsvPath);
 const UNKNOWN_UUID = "3f2b7c1e-8a44-4f5b-9c1d-2e6a7b8c9d0e";
 
 /**
@@ -417,5 +425,92 @@ describe.skipIf(!hasDatabase)("favoured stations: deterministic ties (integratio
     const { favouredStations } = (await response.json()) as DriverDetail;
 
     expect(favouredStations.stations.map((s) => s.station.nameRaw)).toEqual(["LOVES #2", "LOVES #1"]);
+  });
+});
+
+/**
+ * The real invoice. Figures are the ones invoice999210.test.ts already pins from
+ * the printed totals — 66 stops, 8,733.11 TA gallons, 174.43 DF, a weighted
+ * average that rounds to 5.55 — so the rollups are held to BVD's numbers, not
+ * to what the code happens to return.
+ */
+describe.skipIf(!hasDatabase || !hasRealFixture)("driver and truck rollups on 999210 (integration, local fixture only)", () => {
+  let adminPool: Pool;
+  let scopedPool: Pool;
+  let schema: string;
+  let app: App;
+  let period: string;
+
+  beforeEach(async () => {
+    ({ adminPool, scopedPool, schema } = await scopedSchema("test_rollups_999210"));
+    app = createApp({ pool: scopedPool });
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitCode = await runImportInvoiceCli([realCsvPath], scopedPool);
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+    expect(exitCode).toBe(0);
+    period = (await scopedPool.query<{ p: string }>("SELECT to_char(period_start, 'YYYY-MM-DD') AS p FROM invoices")).rows[0]!.p;
+  });
+
+  afterEach(async () => {
+    await teardown(adminPool, scopedPool, schema);
+  });
+
+  async function get<T>(pathAndQuery: string): Promise<T> {
+    const response = await app.handle(new Request(`http://localhost/api/v1${pathAndQuery}`));
+    expect(response.status).toBe(200);
+    return (await response.json()) as T;
+  }
+
+  it("the driver fleet is the whole invoice: 66 stops, 8,733.11 diesel gallons, 174.43 DEF, weighted average 5.55", async () => {
+    const { fleet } = await get<DriversResult>(`/drivers?period=${period}`);
+
+    expect(fleet.stopCount).toBe(66);
+    expect(fleet.gallons).toBe(8733.11);
+    expect(fleet.defGallons).toBe(174.43);
+    expect(fleet.avgBilledUsdPerGal!.toFixed(2)).toBe("5.55");
+  });
+
+  it("driver rows plus the unresolved bucket reconcile to the fleet — no stop, dollar or gallon is lost", async () => {
+    const { rows, unresolved, fleet } = await get<DriversResult>(`/drivers?period=${period}`);
+
+    expect(rows.reduce((s, r) => s + r.stopCount, 0) + unresolved.stopCount).toBe(fleet.stopCount);
+    expect(rows.reduce((s, r) => s + r.totalUsd, 0) + unresolved.totalUsd).toBeCloseTo(fleet.totalUsd, 2);
+    expect(rows.reduce((s, r) => s + r.gallons, 0) + unresolved.gallons).toBeCloseTo(fleet.gallons, 2);
+  });
+
+  it("truck rows plus the unresolved bucket reconcile to the same fleet", async () => {
+    const drivers = await get<DriversResult>(`/drivers?period=${period}`);
+    const { rows, unresolved, fleet } = await get<TrucksResult>(`/trucks?period=${period}`);
+
+    expect(rows.reduce((s, r) => s + r.stopCount, 0) + unresolved.stopCount).toBe(66);
+    // The same figures grouped two ways: identical up to float summation order.
+    const { avgBilledUsdPerGal, defRatio, ...exact } = fleet;
+    const { avgBilledUsdPerGal: driverAvg, defRatio: driverDefRatio, ...driverExact } = drivers.fleet;
+    expect(exact).toEqual(driverExact);
+    expect(avgBilledUsdPerGal).toBeCloseTo(driverAvg!, 10);
+    expect(defRatio).toBeCloseTo(driverDefRatio!, 10);
+  });
+
+  it("the biggest spender is the same driver, at the same dollars, as the Overview's top-spend list", async () => {
+    const list = await get<DriversResult>(`/drivers?period=${period}`);
+    const overview = await get<OverviewResult>(`/overview?period=${period}`);
+    const top = overview.topSpendByDriver.find((d) => d.driverId !== null)!;
+    const row = list.rows.find((r) => r.driver.id === top.driverId)!;
+
+    expect(row.totalUsd).toBe(top.totalUsd);
+    expect(row.gallons).toBe(top.gallons);
+    expect(row.avgBilledUsdPerGal).toBeCloseTo(top.avgBilledUsdPerGal!, 10);
+  });
+
+  it("a driver's detail matches their list row", async () => {
+    const list = await get<DriversResult>(`/drivers?period=${period}`);
+    const busiest = list.rows.find((r) => r.stopCount > 0)!;
+
+    const detail = await get<DriverDetail>(`/drivers/${busiest.driver.id}?period=${period}`);
+
+    const { driver: _driver, ...rollup } = busiest;
+    expect(detail.summary).toEqual(rollup);
   });
 });
