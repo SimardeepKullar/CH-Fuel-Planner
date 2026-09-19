@@ -564,7 +564,7 @@ Common steps, applied per ticket rather than repeated below: a pure query-builde
 **Logic.** Price per site per day, with a nullable `discrepancy` against the published file.
 
 **Tests.**
-- Site 25334 on 9/7 and 9/9 returns **5.5208** for all five cards — the A6.5 finding, asserted.
+- Site 25334 on 9/7 and 9/9 returns **5.5208** for every card (three on 9/7, one on 9/9 — measured; A6.5's "five" was the station's total rows) — the A6.5 finding, asserted. The station row must be seeded with `site_ref` `25334` *before* the import, since a bare test schema loads no stations.
 - `discrepancy` is `null` (not `0`) when no published file exists for the date.
 - A synthetic published file 2 cents below the billed price yields a positive discrepancy at *billing error* severity.
 - **Pass:** all three.

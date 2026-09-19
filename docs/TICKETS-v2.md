@@ -60,17 +60,17 @@ If the spec and the repository disagree, say so and propose the edit.
 | T-23 | Missing UI states | T-21 | 5 | specified · amend per D15 |
 | T-24 | Deployment — Vercel + Neon | T-21 | 6 | specified · amend per A16 |
 | **T-25** | **Actuals schema migration** | T-02 | **7** | **done — merged (`324e939`, PR #12)** |
-| **T-26** | **Shared reference layer and effective-dated assignments** | T-25 | **7** | **new** |
-| **T-27** | **BVD invoice parser — CSV, with PDF fallback** | T-25 | **7** | **new** |
-| **T-28** | **Reconciliation and quarantine** | T-26, T-27 | **7** | **new** |
-| **T-29** | **Raw→resolved resolution at import** | T-26, T-28 | **7** | **new** |
-| **T-30** | **Anomaly engine** | T-29 | **7** | **new** |
-| **T-31** | **`npm run import-invoice` + the 999210 import** | T-28, T-29, T-30 | **7** | **new** |
-| **T-32** | **Transactions and transaction-detail endpoints** | T-31 | **8** | **new** |
-| **T-33** | **Overview endpoint** | T-31 | **8** | **new** |
-| **T-34** | **Invoice import endpoints and history** | T-31 | **8** | **new** |
-| **T-35** | **Receipt queue endpoints** | T-31 | **8** | **new** |
-| **T-36** | **Other-charges endpoints** | T-31 | **8** | **new** |
+| **T-26** | **Shared reference layer and effective-dated assignments** | T-25 | **7** | **done — merged (`6d7f188`, PR #13)** |
+| **T-27** | **BVD invoice parser — CSV, with PDF fallback** | T-25 | **7** | **done — merged (`eb1d757`, PR #14)** |
+| **T-28** | **Reconciliation and quarantine** | T-26, T-27 | **7** | **done — merged (`8b6be62`, PR #15)** |
+| **T-29** | **Raw→resolved resolution at import** | T-26, T-28 | **7** | **done — merged (`aa92917`, PR #17)** |
+| **T-30** | **Anomaly engine** | T-29 | **7** | **done — merged (`85d98f3`, PR #18)** |
+| **T-31** | **`npm run import-invoice` + the 999210 import** | T-28, T-29, T-30 | **7** | **done — merged (`48009d2`, PR #19)** |
+| **T-32** | **Transactions and transaction-detail endpoints** | T-31 | **8** | **done — merged (`f196ec7`, PR #20)** |
+| **T-33** | **Overview endpoint** | T-31 | **8** | **done — merged (`115b6ae`, PR #22)** |
+| **T-34** | **Invoice import endpoints and history** | T-31 | **8** | **done — merged (`4b8e899`, PR #24)** |
+| **T-35** | **Receipt queue endpoints** | T-31 | **8** | **done — merged (`bed13eb`, PR #27)** |
+| **T-36** | **Other-charges endpoints** | T-31 | **8** | **done — merged (`d925cd1`, PR #28)** |
 | **T-37** | **Analysis endpoints — drivers, trucks, stations** | T-31 | **8** | **new** |
 | **T-38** | **Plan vs Actual matching and endpoints** | T-19, T-31 | **8** | **new** |
 | **T-39** | **App shell — sidebar IA and invoice-period selector** | T-21 | **9** | **new** |
@@ -82,7 +82,7 @@ If the spec and the repository disagree, say so and propose the edit.
 | **T-45** | **Drivers, Trucks, Stations screens** | T-37, T-22, T-39 | **9** | **new** |
 | **T-46** | **Plan vs Actual screen — live and backtest** | T-38, T-39 | **9** | **new** |
 | **T-47** | **Settings — assignments, aliases, thresholds** | T-26, T-30, T-39 | **9** | **new** |
-| **T-48** | **Historical invoice backfill** | T-31 | **10** | **new** |
+| **T-48** | **Historical invoice backfill** | T-31 | **10** | **done — merged (`f4c94a5`, PR #26)** |
 | **T-49** | **Deploy v2** | T-24, T-40…T-47 | **10** | **new** |
 
 **Critical path:** T-25 → T-27 → T-28 → T-29 → T-31 → T-32 → T-40. Everything else in Phase 8/9 hangs off T-31 and can run in parallel once it lands. T-38/T-46 additionally need the v1 plan path (T-11…T-19) finished.
@@ -360,7 +360,7 @@ Every ticket here: numbers not strings, nulls preserved, `currency: "USD"` on mo
 - [ ] Driver list returns spend, gallons, gallons-weighted average billed $/gal, receipt compliance %, anomaly count.
 - [ ] Driver detail returns their average billed price **against the fleet average** for the same period, favoured stations, and the DEF:diesel gallon ratio.
 - [ ] Truck detail returns the assigned card **and the assignment history**, and past stops resolve against the assignment in force then (T-26).
-- [ ] `GET /stations/{id}/billed-prices` shows price per site per day and demonstrates the A6.5 finding: five cards at site 25334 on 9/7 and 9/9 all at **5.5208**.
+- [ ] `GET /stations/{id}/billed-prices` shows price per site per day and demonstrates the A6.5 finding: every card at site 25334 on 9/7 (three) and 9/9 (one) at **5.5208**. *(Measured on the real 999210 file: A6.5's "five drivers on 9/7 and 9/9" is wrong — five is the station's total diesel rows, including 9/3 at 5.6593.)*
 - [ ] A discrepancy field is present and is `null` (not `0`) when no published price file exists (A18 Q5).
 
 ---
