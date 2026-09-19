@@ -294,17 +294,27 @@ interface TopSpendRow {
   weighted_num: string | null;
 }
 
+/** Lines are folded into one row per stop *before* the group-by: summing
+ * `fuel_stops.total_usd` straight across a join to `fuel_stop_lines` counts a
+ * stop's total once per line, so a stop with a TA and a DF line was doubled. */
 async function loadTopSpendByDriver(pool: Pool, invoiceId: string, limit: number): Promise<OverviewTopSpendDriver[]> {
   const { rows } = await pool.query<TopSpendRow>(
-    `SELECT fs.driver_id, d.display_name,
-            SUM(fs.total_usd) AS total_usd,
-            SUM(fsl.gallons) FILTER (WHERE fsl.product_code = 'TA') AS ta_gallons,
-            SUM(fsl.gallons * fsl.billed_usd_per_gal) FILTER (WHERE fsl.product_code = 'TA') AS weighted_num
-     FROM fuel_stops fs
-     LEFT JOIN drivers d ON d.id = fs.driver_id
-     LEFT JOIN fuel_stop_lines fsl ON fsl.fuel_stop_id = fs.id
-     WHERE fs.invoice_id = $1
-     GROUP BY fs.driver_id, d.display_name
+    `WITH stop_agg AS (
+       SELECT fs.id, fs.driver_id, fs.total_usd,
+              SUM(fsl.gallons) FILTER (WHERE fsl.product_code = 'TA') AS ta_gallons,
+              SUM(fsl.gallons * fsl.billed_usd_per_gal) FILTER (WHERE fsl.product_code = 'TA') AS weighted_num
+       FROM fuel_stops fs
+       LEFT JOIN fuel_stop_lines fsl ON fsl.fuel_stop_id = fs.id
+       WHERE fs.invoice_id = $1
+       GROUP BY fs.id
+     )
+     SELECT s.driver_id, d.display_name,
+            SUM(s.total_usd) AS total_usd,
+            SUM(s.ta_gallons) AS ta_gallons,
+            SUM(s.weighted_num) AS weighted_num
+     FROM stop_agg s
+     LEFT JOIN drivers d ON d.id = s.driver_id
+     GROUP BY s.driver_id, d.display_name
      ORDER BY total_usd DESC
      LIMIT $2`,
     [invoiceId, limit],
